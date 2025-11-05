@@ -1,0 +1,115 @@
+# Configuration file for Stock Price Prediction Project
+
+# Data Configuration
+data:
+  symbol: "NVDA"
+  start_date: "2018-01-01"
+  end_date: "2024-01-01"
+  test_size: 0.2
+  validation_size: 0.1
+
+# Feature Engineering
+features:
+  # Lagged features
+  lag_periods: [1, 2, 3, 5, 10, 20]
+
+  # Moving averages
+  sma_windows: [10, 20, 50, 100, 200]
+  ema_windows: [12, 26, 50]
+
+  # Technical indicators
+  rsi_period: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  bollinger_window: 20
+  bollinger_std: 2
+  atr_period: 14
+  stoch_k: 14
+  stoch_d: 3
+
+  # Volume indicators
+  volume_sma: 20
+  obv: true
+
+  # Volatility features
+  rolling_std_windows: [10, 20, 30]
+
+  # Price patterns
+  price_changes: [1, 5, 10, 20]
+
+# Model Configuration
+models:
+  random_forest:
+    n_estimators: [100, 200, 300]
+    max_depth: [10, 20, 30, null]
+    min_samples_split: [2, 5, 10]
+    min_samples_leaf: [1, 2, 4]
+
+  xgboost:
+    n_estimators: [100, 200, 300]
+    max_depth: [3, 5, 7, 9]
+    learning_rate: [0.01, 0.05, 0.1]
+    subsample: [0.8, 0.9, 1.0]
+    colsample_bytree: [0.8, 0.9, 1.0]
+
+  lightgbm:
+    n_estimators: [100, 200, 300]
+    max_depth: [3, 5, 7, 9]
+    learning_rate: [0.01, 0.05, 0.1]
+    num_leaves: [31, 50, 70]
+
+  lstm:
+    sequence_length: 60
+    lstm_units: [50, 100]
+    dropout: [0.2, 0.3]
+    epochs: 100
+    batch_size: 32
+    learning_rate: 0.001
+
+# Hyperparameter Tuning
+tuning:
+  method: "random_search"  # random_search or grid_search
+  cv_folds: 5
+  n_iter: 20
+  scoring: "neg_mean_squared_error"
+
+# Backtesting
+backtesting:
+  initial_capital: 100000
+  commission: 0.001  # 0.1%
+  slippage: 0.0005   # 0.05%
+  walk_forward_splits: 5
+
+# Evaluation Metrics
+evaluation:
+  metrics:
+    - "mse"
+    - "rmse"
+    - "mae"
+    - "mape"
+    - "r2"
+    - "directional_accuracy"
+    - "sharpe_ratio"
+    - "max_drawdown"
+
+# Paths
+paths:
+  data_dir: "data"
+  models_dir: "models"
+  results_dir: "results"
+  logs_dir: "logs"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Visualization
+visualization:
+  style: "seaborn"
+  figure_size: [14, 8]
+  dpi: 100
+
+# Random seed for reproducibility
+random_seed: 42

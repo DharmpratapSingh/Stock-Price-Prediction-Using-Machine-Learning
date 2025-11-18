@@ -6,6 +6,63 @@
 
 A professional-grade quantitative trading system implementing modern portfolio theory, statistical arbitrage strategies, and machine learning-based alpha generation. Built for institutional-quality research and backtesting with rigorous statistical methodology.
 
+---
+
+## 📊 System Architecture
+
+```mermaid
+flowchart TB
+    subgraph Data["Data Layer"]
+        A[Market Data APIs] --> B[Data Loader]
+        B --> C[Data Validation]
+        C --> D[Feature Engineering]
+    end
+
+    subgraph Analysis["Statistical Analysis"]
+        D --> E[Stationarity Tests]
+        D --> F[Cointegration Analysis]
+        E --> G[Time Series Validation]
+        F --> G
+    end
+
+    subgraph Models["ML & Factor Models"]
+        G --> H[ML Models<br/>RF, XGBoost, LSTM]
+        G --> I[Factor Models<br/>CAPM, FF3/FF5]
+        G --> J[Regime Detection<br/>HMM]
+    end
+
+    subgraph Portfolio["Portfolio Management"]
+        H --> K[Portfolio Optimization<br/>MVO, Risk Parity, HRP]
+        I --> K
+        J --> K
+        K --> L[Efficient Frontier]
+    end
+
+    subgraph Risk["Risk Management"]
+        K --> M[VaR/CVaR Calculation]
+        K --> N[Risk Metrics<br/>Sharpe, Sortino, IR]
+        K --> O[Drawdown Analysis]
+    end
+
+    subgraph Backtest["Backtesting"]
+        L --> P[Walk-Forward Validation]
+        M --> P
+        N --> P
+        O --> P
+        P --> Q[Performance Attribution]
+        Q --> R[Results & Visualization]
+    end
+
+    style Data fill:#e1f5ff
+    style Analysis fill:#fff4e1
+    style Models fill:#f0e1ff
+    style Portfolio fill:#e1ffe1
+    style Risk fill:#ffe1e1
+    style Backtest fill:#ffe1f5
+```
+
+---
+
 ## 🎯 Overview
 
 This system demonstrates advanced quantitative finance techniques used by hedge funds and asset managers:
@@ -95,6 +152,54 @@ regime_detector = RegimeDetection(returns, n_regimes=3)
 regimes = regime_detector.fit()
 ```
 
+## 🔄 Data Pipeline & Workflow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant DataLoader
+    participant FeatureEng as Feature Engineering
+    participant StatTests as Statistical Tests
+    participant Models
+    participant Portfolio
+    participant Risk
+    participant Backtest
+
+    User->>DataLoader: Request market data
+    DataLoader->>DataLoader: Fetch from Yahoo Finance
+    DataLoader->>DataLoader: Validate & Clean
+    DataLoader->>FeatureEng: Raw OHLCV data
+
+    FeatureEng->>FeatureEng: Create 60+ indicators
+    FeatureEng->>StatTests: Returns series
+
+    StatTests->>StatTests: ADF/KPSS tests
+    StatTests->>StatTests: Check stationarity
+    StatTests-->>FeatureEng: Validation results
+
+    FeatureEng->>Models: Featured dataset
+
+    Models->>Models: Train ML models
+    Models->>Models: Factor analysis
+    Models->>Models: Regime detection
+    Models->>Portfolio: Predictions & signals
+
+    Portfolio->>Portfolio: Optimize weights
+    Portfolio->>Portfolio: Calculate allocations
+    Portfolio->>Risk: Portfolio composition
+
+    Risk->>Risk: Calculate VaR/CVaR
+    Risk->>Risk: Risk-adjusted metrics
+    Risk->>Backtest: Risk constraints
+
+    Backtest->>Backtest: Walk-forward validation
+    Backtest->>Backtest: Apply transaction costs
+    Backtest->>Backtest: Performance attribution
+    Backtest-->>User: Results & Analytics
+```
+
+---
+
 ## 📊 Project Structure
 
 ```
@@ -139,6 +244,71 @@ Stock-Price-Prediction-Using-Machine-Learning/
 ```
 
 ⭐ = New quantitative finance features
+
+---
+
+## 🛠️ Technology Stack
+
+```
+╔═══════════════════════════════════════════════════════════════════════╗
+║                      QUANTITATIVE TRADING SYSTEM                      ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║                                                                       ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │                     DATA LAYER                              │    ║
+║  │  • yfinance          • pandas          • numpy              │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │              STATISTICAL ANALYSIS & TESTING                 │    ║
+║  │  • statsmodels       • scipy           • hmmlearn           │    ║
+║  │  • ADF/KPSS Tests    • Cointegration   • Regime Detection   │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │                  MACHINE LEARNING MODELS                    │    ║
+║  │  • scikit-learn      • XGBoost         • LightGBM           │    ║
+║  │  • TensorFlow/Keras  • Random Forest   • LSTM               │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │              PORTFOLIO OPTIMIZATION                         │    ║
+║  │  • cvxpy             • pypfopt         • scipy.optimize     │    ║
+║  │  • Markowitz MVO     • Risk Parity     • HRP                │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │                 RISK MANAGEMENT                             │    ║
+║  │  • VaR/CVaR          • Sharpe/Sortino  • Information Ratio  │    ║
+║  │  • Drawdown Analysis • Tail Risk       • Tracking Error     │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │              BACKTESTING & EVALUATION                       │    ║
+║  │  • Walk-Forward      • Transaction Costs • Attribution      │    ║
+║  │  • Performance Metrics                   • Benchmarking     │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                              │                                        ║
+║                              ▼                                        ║
+║  ┌─────────────────────────────────────────────────────────────┐    ║
+║  │              VISUALIZATION & REPORTING                      │    ║
+║  │  • matplotlib        • seaborn          • plotly            │    ║
+║  │  • streamlit         • Jupyter notebooks                    │    ║
+║  └─────────────────────────────────────────────────────────────┘    ║
+║                                                                       ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║  DEVELOPMENT & QUALITY                                                ║
+║  • pytest (testing)  • black (formatting)  • flake8 (linting)         ║
+║  • mypy (type check) • GitHub Actions (CI/CD)                         ║
+╚═══════════════════════════════════════════════════════════════════════╝
+```
+
+---
 
 ## 🚀 Installation
 
@@ -289,6 +459,68 @@ python predict.py --model models/xgboost_model.joblib --symbols NVDA AMD TSM
 
 ### 5. Risk Management Framework
 
+```mermaid
+graph TD
+    A[Portfolio Returns] --> B[Risk Analysis Engine]
+
+    B --> C[Volatility Measures]
+    B --> D[Value at Risk VaR]
+    B --> E[Risk-Adjusted Returns]
+    B --> F[Tail Risk]
+    B --> G[Drawdown Analysis]
+
+    C --> C1[Annual Volatility]
+    C --> C2[Downside Deviation]
+    C --> C3[Semi-Variance]
+
+    D --> D1[Historical VaR 95%/99%]
+    D --> D2[Parametric VaR]
+    D --> D3[Monte Carlo VaR]
+    D --> D4[CVaR/Expected Shortfall]
+
+    E --> E1[Sharpe Ratio]
+    E --> E2[Sortino Ratio]
+    E --> E3[Information Ratio]
+    E --> E4[Calmar Ratio]
+    E --> E5[Omega Ratio]
+
+    F --> F1[Skewness]
+    F --> F2[Kurtosis]
+    F --> F3[Tail Ratio]
+
+    G --> G1[Maximum Drawdown]
+    G --> G2[Average Drawdown]
+    G --> G3[Drawdown Duration]
+
+    C1 --> H[Risk Report]
+    C2 --> H
+    C3 --> H
+    D1 --> H
+    D2 --> H
+    D3 --> H
+    D4 --> H
+    E1 --> H
+    E2 --> H
+    E3 --> H
+    E4 --> H
+    E5 --> H
+    F1 --> H
+    F2 --> H
+    F3 --> H
+    G1 --> H
+    G2 --> H
+    G3 --> H
+
+    H --> I{Risk Limits<br/>Violated?}
+    I -->|Yes| J[Adjust Portfolio]
+    I -->|No| K[Execute Strategy]
+
+    style D fill:#ffcdd2
+    style E fill:#c8e6c9
+    style F fill:#fff9c4
+    style H fill:#e1bee7
+```
+
 #### Value at Risk (VaR)
 - **Historical VaR**: Non-parametric, actual distribution
 - **Parametric VaR**: Assumes normal or Student's t-distribution
@@ -303,6 +535,41 @@ Calmar Ratio = Annual Return / Max Drawdown
 ```
 
 ### 6. Portfolio Optimization Methods
+
+```mermaid
+graph LR
+    A[Asset Returns] --> B{Optimization Method}
+
+    B -->|Mean-Variance| C[Markowitz MVO]
+    B -->|Risk Parity| D[Equal Risk Contribution]
+    B -->|Hierarchical| E[HRP Algorithm]
+
+    C --> F[Max Sharpe Ratio]
+    C --> G[Min Volatility]
+    C --> H[Target Return]
+
+    D --> I[Risk Contribution<br/>Equalization]
+
+    E --> J[Hierarchical Clustering]
+    J --> K[Quasi-Diagonalization]
+    K --> L[Recursive Bisection]
+
+    F --> M[Efficient Frontier]
+    G --> M
+    H --> M
+    I --> N[Diversified Portfolio]
+    L --> N
+
+    M --> O[Optimal Weights]
+    N --> O
+
+    O --> P[Portfolio Construction]
+
+    style C fill:#bbdefb
+    style D fill:#c8e6c9
+    style E fill:#fff9c4
+    style O fill:#ffccbc
+```
 
 #### Mean-Variance Optimization (Markowitz, 1952)
 - Maximizes: Return for given risk OR Minimizes: Risk for given return
@@ -321,6 +588,62 @@ Calmar Ratio = Annual Return / Max Drawdown
 
 ### 7. Factor Models
 
+```mermaid
+graph LR
+    A[Asset Returns] --> B{Factor Model}
+
+    B --> C[CAPM]
+    B --> D[Fama-French 3F]
+    B --> E[Fama-French 5F]
+    B --> F[Carhart 4F]
+
+    C --> C1[Market Factor<br/>Rm - Rf]
+
+    D --> D1[Market<br/>Rm - Rf]
+    D --> D2[Size<br/>SMB]
+    D --> D3[Value<br/>HML]
+
+    E --> E1[Market<br/>Rm - Rf]
+    E --> E2[Size<br/>SMB]
+    E --> E3[Value<br/>HML]
+    E --> E4[Profitability<br/>RMW]
+    E --> E5[Investment<br/>CMA]
+
+    F --> F1[FF3 Factors]
+    F --> F2[Momentum<br/>UMD]
+
+    C1 --> G[Regression Analysis]
+    D1 --> G
+    D2 --> G
+    D3 --> G
+    E1 --> G
+    E2 --> G
+    E3 --> G
+    E4 --> G
+    E5 --> G
+    F1 --> G
+    F2 --> G
+
+    G --> H{Results}
+    H --> H1[Alpha α]
+    H --> H2[Beta β]
+    H --> H3[R²]
+    H --> H4[t-statistics]
+
+    H1 --> I[Performance<br/>Attribution]
+    H2 --> I
+    H3 --> I
+    H4 --> I
+
+    I --> J[Investment Decision]
+
+    style C fill:#e3f2fd
+    style D fill:#fff3e0
+    style E fill:#e8f5e9
+    style F fill:#fce4ec
+    style I fill:#f3e5f5
+```
+
 #### CAPM
 ```
 E[R_i] = R_f + β_i(E[R_m] - R_f)
@@ -331,10 +654,85 @@ E[R_i] = R_f + β_i(E[R_m] - R_f)
 R_i - R_f = α + β_1(R_m - R_f) + β_2(SMB) + β_3(HML) + ε
 ```
 
+Where:
+- **SMB** (Small Minus Big): Size factor
+- **HML** (High Minus Low): Value factor
+
 #### Fama-French 5-Factor
-Adds: RMW (profitability) and CMA (investment) factors
+```
+R_i - R_f = α + β_1(R_m - R_f) + β_2(SMB) + β_3(HML) + β_4(RMW) + β_5(CMA) + ε
+```
+
+Adds:
+- **RMW** (Robust Minus Weak): Profitability factor
+- **CMA** (Conservative Minus Aggressive): Investment factor
 
 ### 8. Backtesting Framework
+
+```mermaid
+graph TB
+    A[Historical Data] --> B[Walk-Forward Validation]
+
+    B --> C{Training Window}
+    C --> D[Train Model<br/>t-252 to t]
+
+    D --> E{Testing Window}
+    E --> F[Generate Signals<br/>t to t+21]
+
+    F --> G[Apply Transaction Costs]
+    G --> G1[Commission: 0.1%]
+    G --> G2[Slippage: 0.05%]
+
+    G1 --> H[Simulate Trades]
+    G2 --> H
+
+    H --> I[Track Portfolio]
+    I --> I1[Equity Curve]
+    I --> I2[Positions]
+    I --> I3[Cash]
+
+    I1 --> J[Calculate Metrics]
+    I2 --> J
+    I3 --> J
+
+    J --> K[Performance Attribution]
+    K --> K1[Alpha]
+    K --> K2[Beta]
+    K --> K3[Selection Effect]
+
+    K1 --> L{More<br/>Windows?}
+    K2 --> L
+    K3 --> L
+
+    L -->|Yes| M[Advance Window<br/>t = t + 21]
+    M --> C
+
+    L -->|No| N[Aggregate Results]
+
+    N --> O[Final Report]
+    O --> O1[Total Return]
+    O --> O2[Sharpe Ratio]
+    O --> O3[Max Drawdown]
+    O --> O4[Win Rate]
+
+    P[Buy & Hold Benchmark] --> Q[Benchmark Metrics]
+    Q --> R{Compare}
+
+    O1 --> R
+    O2 --> R
+    O3 --> R
+    O4 --> R
+
+    R --> S[Strategy Analysis]
+
+    style B fill:#e3f2fd
+    style G fill:#ffebee
+    style J fill:#e8f5e9
+    style K fill:#fff3e0
+    style S fill:#f3e5f5
+```
+
+**Key Features:**
 - **Walk-Forward Validation**: Rolling window retraining
 - **Transaction Costs**: Commission (0.1%), slippage (0.05%)
 - **Performance Attribution**: Decompose returns into alpha, beta, and selection effects
@@ -342,6 +740,67 @@ Adds: RMW (profitability) and CMA (investment) factors
 - **Realistic Execution**: Market impact modeling, liquidity constraints
 
 ## 📊 Results & Performance
+
+### Efficient Frontier Visualization
+
+```
+                    Expected Return (%)
+                          ^
+                     40%  |                    ● Max Sharpe
+                          |                  ╱
+                     35%  |                ╱
+                          |              ╱ ◆ Individual Assets
+                     30%  |          ╱ ╱
+                          |        ╱ ╱ ●
+                     25%  |    ╱ ╱ ●
+                          |  ╱ ● ●
+                     20%  |╱ ●              Efficient Frontier
+                       ╱  |●                  (Optimal Portfolios)
+                     15%  ★ Min Volatility
+                          |
+                     10%  |
+                          |
+                      5%  |
+                          |
+                      0%  └─────────────────────────────────────>
+                          5%   10%   15%   20%   25%   30%
+                                   Volatility (%)
+
+Legend:
+  ★  Minimum Volatility Portfolio (lowest risk)
+  ●  Maximum Sharpe Ratio Portfolio (best risk-adjusted)
+  ◆  Individual asset positions
+  ╱  Efficient Frontier (optimal risk-return combinations)
+```
+
+### Risk-Return Trade-off Analysis
+
+```
+╔════════════════════════════════════════════════════════════════╗
+║  STRATEGY COMPARISON: Risk vs. Return                         ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                ║
+║  Return                                                        ║
+║  (Annual)                                                      ║
+║    │                                                           ║
+║ 50%│                     ● Buy & Hold                          ║
+║    │                    (High Return,                          ║
+║ 40%│                     High Risk)                            ║
+║    │                                                           ║
+║ 30%│            ★ ML Strategy                                  ║
+║    │           (Balanced)                                      ║
+║ 20%│    ◆ Risk Parity                                          ║
+║    │   (Lower Risk)                                            ║
+║ 10%│                                                           ║
+║    │                                                           ║
+║  0%└────┼────┼────┼────┼────┼────┼────┼────> Volatility      ║
+║        5%  10%  15%  20%  25%  30%  35%  40%                  ║
+║                                                                ║
+║  ★ ML Strategy:     Sharpe 1.87 | MDD -18.4%                  ║
+║  ● Buy & Hold:      Sharpe 2.14 | MDD -31.2%                  ║
+║  ◆ Risk Parity:     Sharpe 1.92 | MDD -12.7%                  ║
+╚════════════════════════════════════════════════════════════════╝
+```
 
 ### Model Performance (NVDA 2020-2024)
 

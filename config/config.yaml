@@ -111,5 +111,30 @@ visualization:
   figure_size: [14, 8]
   dpi: 100
 
+# Feature Selection
+feature_selection:
+  enabled: true
+  method: "correlation"  # correlation, importance, mutual_info, rfe, model_based
+  top_k: 50  # Number of features to select (if applicable)
+  correlation_threshold: 0.95  # For correlation method
+
+# Caching
+cache:
+  enabled: true
+  cache_dir: "cache"
+  ttl_days: 1  # Time to live in days
+
+# Ensemble
+ensemble:
+  enabled: false  # Set to true to use ensemble instead of single best model
+  method: "average"  # average, weighted, stacking
+  models: ["random_forest", "xgboost", "lightgbm"]
+
+# Training Options
+training:
+  use_hyperparameter_tuning: true  # Enable hyperparameter tuning
+  use_walk_forward: false  # Use walk-forward validation (more realistic but slower)
+  use_feature_selection: true  # Use feature selection
+
 # Random seed for reproducibility
 random_seed: 42

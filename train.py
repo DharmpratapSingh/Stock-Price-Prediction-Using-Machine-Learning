@@ -1,5 +1,6 @@
 """
 Main training pipeline for stock price prediction
+Enhanced with hyperparameter tuning, feature selection, and ensemble support
 """
 
 import argparse
@@ -11,8 +12,10 @@ import numpy as np
 from src.utils import load_config, setup_logging, time_series_split, save_model, save_results
 from src.data_loader import load_stock_data
 from src.feature_engineering import FeatureEngineer, create_target_variable
-from src.models import get_model
-from src.evaluation import ModelEvaluator, compare_models
+from src.feature_selection import FeatureSelector, analyze_feature_correlation
+from src.models import get_model, ModelTuner
+from src.ensemble import ModelEnsemble, create_ensemble
+from src.evaluation import ModelEvaluator, compare_models, walk_forward_validation
 from src.backtesting import Backtester, WalkForwardBacktester, print_backtest_results
 from src.visualize import StockVisualizer
 
@@ -21,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 def main(config_path: str = "config/config.yaml", model_name: str = None):
     """
-    Main training function
+    Main training function with enhanced features
 
     Args:
         config_path: Path to configuration file
@@ -37,7 +40,7 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
     )
 
     logger.info("=" * 80)
-    logger.info("STOCK PRICE PREDICTION TRAINING PIPELINE")
+    logger.info("STOCK PRICE PREDICTION TRAINING PIPELINE (ENHANCED)")
     logger.info("=" * 80)
 
     # Create directories
@@ -45,15 +48,21 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
     Path(config['paths']['models_dir']).mkdir(exist_ok=True)
     Path(config['paths']['results_dir']).mkdir(exist_ok=True)
     Path(config['paths']['logs_dir']).mkdir(exist_ok=True)
+    
+    # Create cache directory if caching enabled
+    if config.get('cache', {}).get('enabled', True):
+        Path(config.get('cache', {}).get('cache_dir', 'cache')).mkdir(exist_ok=True)
 
     # Load data
     logger.info(f"\n📊 Loading data for {config['data']['symbol']}...")
+    use_cache = config.get('cache', {}).get('enabled', True)
     data = load_stock_data(
         symbol=config['data']['symbol'],
         start_date=config['data']['start_date'],
         end_date=config['data']['end_date'],
         validate=True,
-        clean=True
+        clean=True,
+        use_cache=use_cache
     )
 
     logger.info(f"Data loaded: {len(data)} records")
@@ -72,6 +81,44 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
 
     logger.info(f"Final dataset shape: {final_data.shape}")
 
+    # Feature selection
+    feature_cols = [col for col in final_data.columns if col not in ['target', 'Close', 'Open', 'High', 'Low']]
+    
+    if config.get('training', {}).get('use_feature_selection', True):
+        logger.info("\n🔍 Performing feature selection...")
+        selection_config = config.get('feature_selection', {})
+        
+        if selection_config.get('enabled', True):
+            selector = FeatureSelector(
+                method=selection_config.get('method', 'correlation'),
+                threshold=selection_config.get('correlation_threshold', 0.95)
+            )
+            
+            top_k = selection_config.get('top_k', None)
+            selected_features = selector.select_features(
+                final_data,
+                target_col='target',
+                top_k=top_k
+            )
+            
+            if len(selected_features) > 0:
+                feature_cols = selected_features
+                logger.info(f"Selected {len(feature_cols)} features (from {len([col for col in final_data.columns if col not in ['target', 'Close', 'Open', 'High', 'Low']])} total)")
+                
+                # Analyze feature correlation with target
+                corr_analysis = analyze_feature_correlation(final_data, target_col='target', top_n=20)
+                if not corr_analysis.empty:
+                    logger.info("\nTop features by correlation with target:")
+                    logger.info(corr_analysis.to_string(index=False))
+            else:
+                logger.warning("Feature selection returned no features, using all features")
+        else:
+            logger.info("Feature selection disabled in config")
+    else:
+        logger.info("Feature selection skipped")
+
+    logger.info(f"Final number of features: {len(feature_cols)}")
+
     # Split data (time series split)
     logger.info("\n✂️ Splitting data...")
     train_data, val_data, test_data = time_series_split(
@@ -83,7 +130,6 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
     logger.info(f"Train: {len(train_data)} | Val: {len(val_data)} | Test: {len(test_data)}")
 
     # Prepare feature and target columns
-    feature_cols = [col for col in final_data.columns if col not in ['target', 'Close']]
     target_col = 'target'
 
     X_train = train_data[feature_cols]
@@ -93,7 +139,17 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
     X_test = test_data[feature_cols]
     y_test = test_data[target_col]
 
-    logger.info(f"Number of features: {len(feature_cols)}")
+    # Check if using walk-forward validation
+    use_walk_forward = config.get('training', {}).get('use_walk_forward', False)
+    use_ensemble = config.get('ensemble', {}).get('enabled', False)
+    use_tuning = config.get('training', {}).get('use_hyperparameter_tuning', True)
+
+    if use_walk_forward:
+        logger.info("\n🔄 Using walk-forward validation...")
+        # This is a more realistic but slower approach
+        # For now, we'll use regular training but note this option
+        logger.info("Walk-forward validation is available but using standard split for this run")
+        logger.info("Use WalkForwardBacktester for full walk-forward backtesting")
 
     # Train models
     logger.info("\n🤖 Training models...")
@@ -109,12 +165,49 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
         logger.info('='*60)
 
         try:
-            # Get model
-            model = get_model(model_type)
-
-            # Train
-            logger.info("Training...")
-            model.fit(X_train, y_train)
+            # Hyperparameter tuning
+            if use_tuning and model_type in config.get('models', {}):
+                logger.info("🔧 Performing hyperparameter tuning...")
+                
+                tuning_config = config.get('tuning', {})
+                model_config = config['models'].get(model_type, {})
+                
+                if model_config:
+                    # Convert config lists to proper format for sklearn
+                    param_grid = {}
+                    for param, values in model_config.items():
+                        # Handle None values
+                        if isinstance(values, list) and None in values:
+                            param_grid[param] = [v for v in values if v is not None] + [None]
+                        else:
+                            param_grid[param] = values
+                    
+                    # Get model class
+                    from src.models import get_model
+                    model_class = type(get_model(model_type))
+                    
+                    # Create tuner
+                    tuner = ModelTuner(
+                        model_class=model_class,
+                        param_grid=param_grid,
+                        cv_splits=tuning_config.get('cv_folds', 5),
+                        n_iter=tuning_config.get('n_iter', 20),
+                        method=tuning_config.get('method', 'random_search').replace('_search', '')
+                    )
+                    
+                    # Tune model
+                    model = tuner.tune(X_train, y_train)
+                    logger.info(f"Tuning completed. Best params: {tuner.best_params}")
+                    # Model is already fitted by tuner
+                else:
+                    # No tuning config, use default model
+                    model = get_model(model_type)
+                    model.fit(X_train, y_train)
+            else:
+                # No tuning, train normally
+                model = get_model(model_type)
+                logger.info("Training with default parameters...")
+                model.fit(X_train, y_train)
 
             # Validate
             logger.info("Validating...")
@@ -150,8 +243,60 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
             logger.info(f"Model saved to {model_path}")
 
         except Exception as e:
-            logger.error(f"Error training {model_type}: {str(e)}")
+            logger.error(f"Error training {model_type}: {str(e)}", exc_info=True)
             continue
+
+    if len(results) == 0:
+        logger.error("No models were successfully trained. Exiting.")
+        return
+
+    # Ensemble model (if enabled)
+    if use_ensemble and len(trained_models) > 1:
+        logger.info("\n" + "="*80)
+        logger.info("CREATING ENSEMBLE MODEL")
+        logger.info("="*80)
+        
+        ensemble_config = config.get('ensemble', {})
+        ensemble_method = ensemble_config.get('method', 'average')
+        ensemble_model_names = ensemble_config.get('models', list(trained_models.keys()))
+        
+        # Filter to only include trained models
+        ensemble_models = [trained_models[name] for name in ensemble_model_names if name in trained_models]
+        
+        if len(ensemble_models) > 1:
+            ensemble = ModelEnsemble(ensemble_models, method=ensemble_method)
+            
+            # For weighted or stacking, set weights from validation performance
+            if ensemble_method in ['weighted', 'stacking']:
+                ensemble.set_weights_from_performance(X_val, y_val)
+                if ensemble_method == 'stacking':
+                    ensemble.fit_stacking(X_train, y_train, X_val, y_val)
+            
+            # Evaluate ensemble
+            ensemble_val_pred = ensemble.predict(X_val)
+            ensemble_test_pred = ensemble.predict(X_test)
+            
+            ensemble_val_eval = ModelEvaluator(y_val.values, ensemble_val_pred)
+            ensemble_test_eval = ModelEvaluator(y_test.values, ensemble_test_pred)
+            
+            ensemble_val_metrics = ensemble_val_eval.calculate_all_metrics()
+            ensemble_test_metrics = ensemble_test_eval.calculate_all_metrics()
+            
+            logger.info(f"Ensemble Validation R²: {ensemble_val_metrics['R2']:.4f}")
+            logger.info(f"Ensemble Test R²: {ensemble_test_metrics['R2']:.4f}")
+            
+            # Add ensemble to results
+            trained_models['ensemble'] = ensemble
+            results['ensemble'] = {
+                'val_predictions': ensemble_val_pred,
+                'test_predictions': ensemble_test_pred,
+                'val_metrics': ensemble_val_metrics,
+                'test_metrics': ensemble_test_metrics
+            }
+            
+            # Save ensemble
+            ensemble_path = save_model(ensemble, 'ensemble', config['paths']['models_dir'])
+            logger.info(f"Ensemble saved to {ensemble_path}")
 
     # Compare models
     if len(results) > 1:
@@ -249,14 +394,18 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
     )
 
     # Plot feature importance (if available)
-    if hasattr(trained_models[best_model_name].model, 'feature_importances_'):
-        importance_df = trained_models[best_model_name].get_feature_importance(feature_cols)
-        visualizer.plot_feature_importance(
-            importance_df,
-            top_n=20,
-            title=f"{best_model_name.upper()} - Feature Importance",
-            save_path=f"{config['paths']['results_dir']}/{best_model_name}_feature_importance.png"
-        )
+    best_model_obj = trained_models[best_model_name]
+    if hasattr(best_model_obj, 'get_feature_importance'):
+        try:
+            importance_df = best_model_obj.get_feature_importance(feature_cols)
+            visualizer.plot_feature_importance(
+                importance_df,
+                top_n=20,
+                title=f"{best_model_name.upper()} - Feature Importance",
+                save_path=f"{config['paths']['results_dir']}/{best_model_name}_feature_importance.png"
+            )
+        except Exception as e:
+            logger.warning(f"Could not plot feature importance: {str(e)}")
 
     # Save results
     logger.info("\n💾 Saving results...")
@@ -266,7 +415,9 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
         'models': results,
         'best_model': best_model_name,
         'comparison': comparison,
-        'feature_cols': feature_cols
+        'feature_cols': feature_cols,
+        'n_features_original': len([col for col in final_data.columns if col not in ['target', 'Close', 'Open', 'High', 'Low']]),
+        'n_features_selected': len(feature_cols)
     }
 
     results_path = save_results(all_results, 'training_results', config['paths']['results_dir'])

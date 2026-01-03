@@ -433,7 +433,7 @@ class ModelTuner:
         self.best_params = None
         self.best_model = None
 
-    def tune(self, X_train: pd.DataFrame, y_train: pd.Series) -> Dict:
+    def tune(self, X_train: pd.DataFrame, y_train: pd.Series) -> StockPriceModel:
         """
         Perform hyperparameter tuning
 
@@ -442,12 +442,13 @@ class ModelTuner:
             y_train: Training target
 
         Returns:
-            Best parameters
+            Tuned model instance with best parameters
         """
         logger.info(f"Starting hyperparameter tuning using {self.method} search")
 
-        # Create base model
-        base_model = self.model_class().model
+        # Create base model instance
+        base_model_wrapper = self.model_class()
+        base_model = base_model_wrapper.model
 
         # Time series cross-validation
         tscv = TimeSeriesSplit(n_splits=self.cv_splits)
@@ -474,19 +475,26 @@ class ModelTuner:
                 verbose=1
             )
 
-        # Fit
+        # Scale data
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_train)
 
+        # Fit search
         search.fit(X_scaled, y_train)
 
         self.best_params = search.best_params_
         self.best_model = search.best_estimator_
 
+        # Update the model wrapper with best parameters and fitted model
+        tuned_model = self.model_class(self.best_params)
+        tuned_model.model = self.best_model
+        tuned_model.scaler = scaler
+        tuned_model.is_fitted = True
+
         logger.info(f"Best parameters: {self.best_params}")
         logger.info(f"Best score: {-search.best_score_:.4f}")
 
-        return self.best_params
+        return tuned_model
 
 
 def get_model(model_name: str, model_params: Optional[Dict] = None) -> StockPriceModel:

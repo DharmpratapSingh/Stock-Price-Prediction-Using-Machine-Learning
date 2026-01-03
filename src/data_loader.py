@@ -305,7 +305,8 @@ def load_stock_data(
     start_date: str,
     end_date: str,
     validate: bool = True,
-    clean: bool = True
+    clean: bool = True,
+    use_cache: bool = True
 ) -> pd.DataFrame:
     """
     Convenience function to load stock data
@@ -316,10 +317,23 @@ def load_stock_data(
         end_date: End date (YYYY-MM-DD)
         validate: Whether to validate data
         clean: Whether to clean data
+        use_cache: Whether to use caching
 
     Returns:
         DataFrame with stock data
     """
+    # Try to load from cache
+    if use_cache:
+        try:
+            from src.cache import get_cache
+            cache = get_cache()
+            cached_data = cache.get(symbol, start_date, end_date, "raw")
+            if cached_data is not None:
+                logger.info(f"Loaded {symbol} data from cache")
+                return cached_data
+        except Exception as e:
+            logger.warning(f"Cache error: {str(e)}, fetching fresh data")
+
     loader = StockDataLoader(symbol, start_date, end_date)
 
     if clean:
@@ -331,5 +345,14 @@ def load_stock_data(
         is_valid, issues = loader.validate_data(data)
         if not is_valid:
             logger.warning(f"Data validation issues: {issues}")
+
+    # Cache the data
+    if use_cache:
+        try:
+            from src.cache import get_cache
+            cache = get_cache()
+            cache.set(data, symbol, start_date, end_date, "raw")
+        except Exception as e:
+            logger.warning(f"Cache error: {str(e)}")
 
     return data

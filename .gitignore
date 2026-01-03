@@ -58,6 +58,10 @@ results/
 logs/
 *.log
 
+# Cache
+cache/
+*.pkl
+
 # Testing
 .pytest_cache/
 .coverage

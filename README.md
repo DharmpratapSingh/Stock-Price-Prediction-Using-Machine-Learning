@@ -9,11 +9,16 @@ This project implements a professional-grade machine learning pipeline for stock
 ## Key Features
 
 - **No Data Leakage**: Proper use of lagged features and time series splitting
-- **Comprehensive Feature Engineering**: 50+ technical indicators including RSI, MACD, Bollinger Bands, ATR, and more
+- **Comprehensive Feature Engineering**: 60+ technical indicators including RSI, MACD, Bollinger Bands, ATR, and more
 - **Multiple Models**: Linear Regression, Random Forest, XGBoost, LightGBM, and LSTM
+- **Hyperparameter Tuning**: Integrated hyperparameter optimization with time series cross-validation
+- **Feature Selection**: Automatic feature selection to reduce overfitting and improve performance
+- **Model Ensembles**: Support for averaging, weighted, and stacking ensemble methods
+- **Data Caching**: Intelligent caching system to speed up repeated experiments
 - **Proper Time Series Methodology**: Chronological splitting and walk-forward validation
 - **Realistic Backtesting**: Includes commission, slippage, and transaction costs
 - **Extensive Metrics**: Statistical, directional, and financial performance metrics
+- **Comprehensive Testing**: Unit tests for all major components
 - **Production-Ready Code**: Modular architecture, configuration management, logging, and testing
 
 ## Project Structure
@@ -24,7 +29,10 @@ Stock-Price-Prediction-Using-Machine-Learning/
 │   ├── __init__.py
 │   ├── data_loader.py          # Data fetching and validation
 │   ├── feature_engineering.py   # Technical indicators and features
+│   ├── feature_selection.py     # Feature selection and correlation analysis
 │   ├── models.py                # ML model implementations
+│   ├── ensemble.py              # Model ensemble methods
+│   ├── cache.py                 # Data caching system
 │   ├── evaluation.py            # Comprehensive metrics
 │   ├── backtesting.py           # Trading simulation
 │   ├── visualize.py             # Visualization tools
@@ -33,13 +41,18 @@ Stock-Price-Prediction-Using-Machine-Learning/
 │   └── config.yaml              # Configuration file
 ├── tests/
 │   ├── __init__.py
-│   └── test_features.py         # Unit tests
+│   ├── test_features.py         # Feature engineering tests
+│   ├── test_models.py           # Model tests
+│   ├── test_evaluation.py       # Evaluation metrics tests
+│   ├── test_backtesting.py      # Backtesting tests
+│   └── test_feature_selection.py # Feature selection tests
 ├── notebooks/
 │   └── stock_prediction.ipynb   # Interactive notebook
 ├── data/                        # Data directory (gitignored)
 ├── models/                      # Saved models (gitignored)
 ├── results/                     # Results and plots (gitignored)
 ├── logs/                        # Log files (gitignored)
+├── cache/                      # Cache directory (gitignored)
 ├── train.py                     # Training pipeline
 ├── predict.py                   # Prediction service
 ├── requirements.txt             # Dependencies
@@ -77,7 +90,7 @@ pip install -r requirements.txt
 
 ### Training Models
 
-Train all models with default configuration:
+Train all models with default configuration (includes hyperparameter tuning and feature selection):
 ```bash
 python train.py
 ```
@@ -91,6 +104,12 @@ Use custom configuration:
 ```bash
 python train.py --config config/custom_config.yaml
 ```
+
+**New Features in Training:**
+- **Hyperparameter Tuning**: Automatically optimizes model parameters using time series cross-validation
+- **Feature Selection**: Reduces feature set to most important features, reducing overfitting
+- **Model Ensembles**: Combine multiple models for better predictions (enable in config)
+- **Data Caching**: Speeds up repeated experiments by caching fetched data
 
 ### Making Predictions
 
@@ -150,7 +169,19 @@ pytest tests/ -v
 - Support/Resistance levels
 - Trend slopes
 
-### 3. Model Training
+### 3. Feature Selection
+
+The system includes comprehensive feature selection capabilities:
+
+- **Correlation-based**: Removes highly correlated features to reduce multicollinearity
+- **Importance-based**: Selects top features based on model importance scores
+- **Mutual Information**: Uses information-theoretic measures to select features
+- **RFE (Recursive Feature Elimination)**: Iteratively removes least important features
+- **Model-based**: Uses trained models to select features
+
+Feature selection is automatically performed during training and can be configured in `config.yaml`.
+
+### 4. Model Training
 
 #### Available Models
 1. **Linear Regression**: Baseline model
@@ -160,12 +191,21 @@ pytest tests/ -v
 5. **LSTM**: Deep learning for time series
 
 #### Training Features
+- **Hyperparameter Tuning**: Automatic optimization using time series cross-validation
+  - Random Search or Grid Search
+  - Configurable number of iterations and CV folds
+  - Model-specific parameter grids
+- **Feature Selection**: Automatic reduction of feature set
+- **Model Ensembles**: Combine multiple models for improved predictions
+  - Average: Simple average of predictions
+  - Weighted: Weighted average based on validation performance
+  - Stacking: Meta-learner trained on base model predictions
 - Time series cross-validation
-- Hyperparameter tuning (GridSearch/RandomSearch)
 - Feature importance analysis
 - Model persistence
+- Data caching for faster iteration
 
-### 4. Evaluation
+### 5. Evaluation
 
 #### Statistical Metrics
 - MSE, RMSE, MAE, MAPE
@@ -185,7 +225,7 @@ pytest tests/ -v
 - Win Rate
 - Profit Factor
 
-### 5. Backtesting
+### 6. Backtesting
 
 - Initial capital: $100,000
 - Commission: 0.1% per trade
@@ -217,11 +257,44 @@ pytest tests/ -v
 
 Edit `config/config.yaml` to customize:
 
-- Stock symbol and date range
-- Feature engineering parameters
-- Model hyperparameters
-- Backtesting settings
-- Paths and logging
+- **Data Settings**: Stock symbol, date range, train/test splits
+- **Feature Engineering**: Technical indicator parameters
+- **Feature Selection**: Method, top_k, correlation threshold
+- **Model Hyperparameters**: Parameter grids for tuning
+- **Hyperparameter Tuning**: Method (random/grid), CV folds, iterations
+- **Ensemble Settings**: Enable/disable, method, model selection
+- **Caching**: Enable/disable, cache directory, TTL
+- **Backtesting**: Capital, commission, slippage
+- **Paths and Logging**: Directory paths, log levels
+
+### New Configuration Options
+
+```yaml
+# Feature Selection
+feature_selection:
+  enabled: true
+  method: "correlation"  # correlation, importance, mutual_info, rfe, model_based
+  top_k: 50
+  correlation_threshold: 0.95
+
+# Caching
+cache:
+  enabled: true
+  cache_dir: "cache"
+  ttl_days: 1
+
+# Ensemble
+ensemble:
+  enabled: false
+  method: "average"  # average, weighted, stacking
+  models: ["random_forest", "xgboost", "lightgbm"]
+
+# Training Options
+training:
+  use_hyperparameter_tuning: true
+  use_walk_forward: false
+  use_feature_selection: true
+```
 
 ## Important Notes
 
@@ -264,6 +337,15 @@ Contributions are welcome! Please:
 4. Add tests
 5. Submit a pull request
 
+## Recent Improvements (v2.1.0)
+
+✅ **Hyperparameter Tuning**: Integrated automatic hyperparameter optimization
+✅ **Feature Selection**: Multiple methods for reducing feature dimensionality
+✅ **Model Ensembles**: Support for averaging, weighted, and stacking ensembles
+✅ **Data Caching**: Intelligent caching system for faster development
+✅ **Comprehensive Testing**: Expanded test coverage for all major components
+✅ **Enhanced Configuration**: More granular control over training process
+
 ## Future Enhancements
 
 - [ ] Sentiment analysis from news and social media
@@ -272,8 +354,9 @@ Contributions are welcome! Please:
 - [ ] Web dashboard with Streamlit/Dash
 - [ ] Options pricing models
 - [ ] Alternative data sources (economic indicators, etc.)
-- [ ] Model ensemble and stacking
 - [ ] Automated model retraining pipeline
+- [ ] Advanced risk management features
+- [ ] Portfolio optimization strategies
 
 ## License
 
@@ -295,6 +378,6 @@ For questions or feedback, please open an issue on GitHub.
 
 ---
 
-**Version**: 2.0.0
-**Last Updated**: 2024-01-01
-**Status**: Production-Ready
+**Version**: 2.1.0
+**Last Updated**: 2024
+**Status**: Production-Ready (Enhanced)

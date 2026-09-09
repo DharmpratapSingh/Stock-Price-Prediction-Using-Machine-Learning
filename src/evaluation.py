@@ -400,81 +400,204 @@ def calculate_confidence_intervals(
     return lower_bound, upper_bound
 
 
-def walk_forward_validation(
-    data: pd.DataFrame,
-    model_class: type,
-    feature_cols: List[str],
-    target_col: str,
-    train_size: int = 252,  # 1 year
-    test_size: int = 21,    # 1 month
-    step_size: int = 21     # 1 month
-) -> Dict[str, any]:
+def wilson_interval(
+    successes: int,
+    n: int,
+    confidence: float = 0.95
+) -> Tuple[float, float]:
     """
-    Perform walk-forward validation
+    Wilson score interval for a binomial proportion.
+
+    Preferred over the normal approximation because it stays inside [0, 1] and
+    behaves sensibly for proportions near 0.5 with a few hundred observations --
+    exactly the regime a directional-accuracy claim lives in.
 
     Args:
-        data: DataFrame with features and target
-        model_class: Model class to use
-        feature_cols: List of feature column names
-        target_col: Target column name
-        train_size: Training window size
-        test_size: Test window size
-        step_size: Step size for rolling window
+        successes: Number of correct predictions
+        n: Number of predictions
+        confidence: Coverage (default 0.95)
 
     Returns:
-        Dictionary with validation results
+        (lower, upper)
     """
-    logger.info("Performing walk-forward validation")
+    from scipy import stats
 
-    predictions = []
-    actuals = []
-    dates = []
+    if n == 0:
+        return (float('nan'), float('nan'))
 
-    n = len(data)
-    start_idx = train_size
+    z = stats.norm.ppf((1 + confidence) / 2)
+    p = successes / n
+    denom = 1 + z ** 2 / n
+    centre = (p + z ** 2 / (2 * n)) / denom
+    margin = z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2)) / denom
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
 
-    while start_idx + test_size <= n:
-        # Define train and test windows
-        train_start = start_idx - train_size
-        train_end = start_idx
-        test_end = min(start_idx + test_size, n)
 
-        # Split data
-        train_data = data.iloc[train_start:train_end]
-        test_data = data.iloc[start_idx:test_end]
+def return_regression_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray
+) -> Dict[str, float]:
+    """
+    Regression metrics for log-return forecasts.
 
-        X_train = train_data[feature_cols]
-        y_train = train_data[target_col]
-        X_test = test_data[feature_cols]
-        y_test = test_data[target_col]
+    R2 here is the honest number: the variance of daily returns explained out of
+    sample. Values at or slightly below zero mean the forecast is no better than
+    predicting the test window's mean, which is what daily equity returns
+    normally deliver.
 
-        # Train model
-        model = model_class()
-        model.fit(X_train, y_train)
+    Args:
+        y_true: Realised log returns
+        y_pred: Forecast log returns
 
-        # Predict
-        y_pred = model.predict(X_test)
+    Returns:
+        Dict with n, RMSE, MAE, R2, and R2 measured against a zero forecast
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+    y_true, y_pred = y_true[mask], y_pred[mask]
 
-        # Store results
-        predictions.extend(y_pred)
-        actuals.extend(y_test.values)
-        dates.extend(test_data.index)
+    n = len(y_true)
+    if n == 0:
+        return {'n': 0, 'RMSE': np.nan, 'MAE': np.nan, 'R2': np.nan, 'R2_vs_zero': np.nan}
 
-        # Move window
-        start_idx += step_size
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+    zero_rmse = float(np.sqrt(np.mean(y_true ** 2)))
 
-    # Calculate metrics
-    evaluator = ModelEvaluator(np.array(actuals), np.array(predictions))
-    metrics = evaluator.calculate_all_metrics()
-
-    results = {
-        'predictions': np.array(predictions),
-        'actuals': np.array(actuals),
-        'dates': dates,
-        'metrics': metrics,
-        'n_windows': len(predictions) // test_size
+    return {
+        'n': n,
+        'RMSE': rmse,
+        'MAE': float(np.mean(np.abs(y_true - y_pred))),
+        'R2': float(r2_score(y_true, y_pred)),
+        # Skill against the zero forecast rather than against the test-window mean.
+        'R2_vs_zero': float(1 - (rmse ** 2) / (zero_rmse ** 2)) if zero_rmse > 0 else np.nan,
     }
 
-    logger.info(f"Walk-forward validation completed with {results['n_windows']} windows")
 
-    return results
+def direction_metrics(
+    y_true_direction: np.ndarray,
+    y_pred_direction: np.ndarray,
+    reference_rate: float = None,
+    confidence: float = 0.95
+) -> Dict[str, float]:
+    """
+    Directional accuracy with an interval and significance tests.
+
+    A bare accuracy number is not interpretable: with ~800 test days, the 95%
+    interval on a coin flip is roughly +/-3.5 points, so 53% is not distinguishable
+    from chance. Two null hypotheses are tested -- 0.5, and the training-window
+    up-frequency, which is the rate an always-up baseline achieves for free.
+
+    Args:
+        y_true_direction: Realised direction, 1 for up, 0 otherwise
+        y_pred_direction: Predicted direction, 1 for up, 0 otherwise
+        reference_rate: Training-window up-frequency for the second test
+        confidence: Interval coverage
+
+    Returns:
+        Dict with accuracy, interval, p-values, precision/recall of 'up'
+    """
+    from scipy import stats
+
+    y_true = np.asarray(y_true_direction, dtype=int)
+    y_pred = np.asarray(y_pred_direction, dtype=int)
+
+    n = len(y_true)
+    if n == 0:
+        return {'n': 0}
+
+    correct = int(np.sum(y_true == y_pred))
+    accuracy = correct / n
+    lower, upper = wilson_interval(correct, n, confidence)
+
+    true_up, pred_up = y_true == 1, y_pred == 1
+    tp = int(np.sum(true_up & pred_up))
+    precision = tp / int(pred_up.sum()) if pred_up.any() else float('nan')
+    recall = tp / int(true_up.sum()) if true_up.any() else float('nan')
+
+    metrics = {
+        'n': n,
+        'accuracy': accuracy,
+        'ci_lower': lower,
+        'ci_upper': upper,
+        'p_vs_0.5': float(stats.binomtest(correct, n, 0.5).pvalue),
+        'precision_up': precision,
+        'recall_up': recall,
+        'pred_up_rate': float(pred_up.mean()),
+        'actual_up_rate': float(true_up.mean()),
+    }
+
+    if reference_rate is not None and 0 < reference_rate < 1:
+        metrics['reference_rate'] = float(reference_rate)
+        metrics['p_vs_reference'] = float(
+            stats.binomtest(correct, n, reference_rate).pvalue
+        )
+
+    return metrics
+
+
+def run_walk_forward(
+    dataset: pd.DataFrame,
+    feature_cols: List[str],
+    target_col: str,
+    estimator_factory,
+    folds: List,
+    task: str = 'regression'
+) -> pd.DataFrame:
+    """
+    Run a walk-forward evaluation and collect out-of-sample predictions.
+
+    This is the only path by which the project produces a test-set number. For
+    each fold a *fresh* estimator is built by ``estimator_factory`` and fitted on
+    that fold's training rows alone; imputation, winsorisation, scaling and
+    feature selection all live inside that estimator, so no fitted statistic ever
+    sees a test row. Folds run forward in time with an embargo and are never
+    shuffled.
+
+    Args:
+        dataset: Chronologically ordered features + targets
+        feature_cols: Model matrix columns
+        target_col: Target column to fit
+        estimator_factory: Zero-argument callable returning an unfitted estimator
+        folds: Folds from utils.walk_forward_folds
+        task: 'regression' or 'classification'
+
+    Returns:
+        DataFrame indexed by date with columns: fold, y_true, y_pred, and for
+        classification also y_proba; plus train_up_rate per fold
+    """
+    frames = []
+
+    for fold in folds:
+        train = dataset.iloc[fold.train_start:fold.train_end]
+        test = dataset.iloc[fold.test_start:fold.test_end]
+
+        X_train, y_train = train[feature_cols], train[target_col]
+        X_test = test[feature_cols]
+
+        estimator = estimator_factory()
+        estimator.fit(X_train, y_train)
+        y_pred = estimator.predict(X_test)
+
+        record = pd.DataFrame(
+            {
+                'fold': fold.index,
+                'y_true': test[target_col].to_numpy(),
+                'y_pred': np.asarray(y_pred).ravel(),
+                'train_up_rate': float((train['target_direction'] > 0).mean())
+                if 'target_direction' in train.columns else np.nan,
+            },
+            index=test.index,
+        )
+
+        if task == 'classification' and hasattr(estimator, 'predict_proba'):
+            proba = estimator.predict_proba(X_test)
+            record['y_proba'] = proba[:, 1] if proba.ndim == 2 else np.asarray(proba).ravel()
+
+        frames.append(record)
+
+    result = pd.concat(frames)
+    logger.info(
+        "Walk-forward complete: %d folds, %d out-of-sample rows", len(folds), len(result)
+    )
+    return result

@@ -8,8 +8,9 @@ import logging
 import joblib
 import numpy as np
 import pandas as pd
+from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
@@ -72,39 +73,6 @@ def create_directories(config: Dict[str, Any]) -> None:
         os.makedirs(path, exist_ok=True)
 
 
-def save_model(model: Any, model_name: str, models_dir: str = "models") -> str:
-    """
-    Save trained model to disk
-
-    Args:
-        model: Trained model object
-        model_name: Name for the saved model
-        models_dir: Directory to save models
-
-    Returns:
-        Path to saved model
-    """
-    os.makedirs(models_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{model_name}_{timestamp}.joblib"
-    filepath = os.path.join(models_dir, filename)
-    joblib.dump(model, filepath)
-    return filepath
-
-
-def load_model(model_path: str) -> Any:
-    """
-    Load trained model from disk
-
-    Args:
-        model_path: Path to saved model
-
-    Returns:
-        Loaded model object
-    """
-    return joblib.load(model_path)
-
-
 def time_series_split(
     data: pd.DataFrame,
     test_size: float = 0.2,
@@ -132,112 +100,171 @@ def time_series_split(
     return train_data, val_data, test_data
 
 
-def get_date_range(start_date: str = None, end_date: str = None) -> Tuple[str, str]:
+@dataclass(frozen=True)
+class Fold:
     """
-    Get date range for data fetching
+    One walk-forward fold, as positional slices into a chronological dataset.
+
+    Slices are half-open: train is ``[train_start, train_end)`` and test is
+    ``[test_start, test_end)``. ``test_start - train_end`` is the embargo.
+    """
+
+    index: int
+    train_start: int
+    train_end: int
+    test_start: int
+    test_end: int
+
+    @property
+    def n_train(self) -> int:
+        return self.train_end - self.train_start
+
+    @property
+    def n_test(self) -> int:
+        return self.test_end - self.test_start
+
+    @property
+    def embargo(self) -> int:
+        return self.test_start - self.train_end
+
+    def as_dict(self) -> Dict[str, int]:
+        return asdict(self)
+
+
+def walk_forward_folds(
+    n_samples: int,
+    initial_train: int = 504,
+    test_size: int = 63,
+    step_size: int = 63,
+    embargo: int = 0,
+    expanding: bool = True
+) -> List[Fold]:
+    """
+    Build ordered walk-forward folds with an embargo between train and test.
+
+    Folds run strictly forward in time and never shuffle. The embargo is the
+    number of rows skipped between the end of the training window and the start
+    of the test window. Setting it to the feature warm-up length (see
+    ``feature_engineering.feature_warmup_length``) guarantees that no feature row
+    in the test fold is computed from any row used for training -- without it,
+    the deepest rolling window would straddle the boundary.
 
     Args:
-        start_date: Start date string (YYYY-MM-DD)
-        end_date: End date string (YYYY-MM-DD)
+        n_samples: Number of chronologically ordered rows
+        initial_train: Rows in the first training window
+        test_size: Rows per test fold
+        step_size: Rows the window advances between folds
+        embargo: Rows skipped between train end and test start
+        expanding: True for an expanding training window (train always starts at
+            row 0), False for a rolling window of fixed length ``initial_train``
 
     Returns:
-        Tuple of (start_date, end_date)
+        List of Fold objects, in time order
+
+    Raises:
+        ValueError: if the arguments cannot produce a single fold
     """
-    if end_date is None:
-        end_date = datetime.now().strftime("%Y-%m-%d")
+    if min(initial_train, test_size, step_size) < 1 or embargo < 0:
+        raise ValueError("initial_train, test_size and step_size must be >= 1; embargo >= 0")
 
-    if start_date is None:
-        # Default to 5 years ago
-        from dateutil.relativedelta import relativedelta
-        start_date = (datetime.now() - relativedelta(years=5)).strftime("%Y-%m-%d")
+    folds: List[Fold] = []
+    train_end = initial_train
+    idx = 0
 
-    return start_date, end_date
+    while train_end + embargo + test_size <= n_samples:
+        test_start = train_end + embargo
+        train_start = 0 if expanding else max(0, train_end - initial_train)
+        folds.append(
+            Fold(
+                index=idx,
+                train_start=train_start,
+                train_end=train_end,
+                test_start=test_start,
+                test_end=test_start + test_size,
+            )
+        )
+        idx += 1
+        train_end += step_size
+
+    if not folds:
+        raise ValueError(
+            f"No folds fit: n_samples={n_samples} needs at least "
+            f"{initial_train + embargo + test_size} rows for "
+            f"initial_train={initial_train}, embargo={embargo}, test_size={test_size}"
+        )
+
+    return folds
 
 
-def calculate_returns(prices: pd.Series) -> pd.Series:
+def folds_to_frame(folds: List[Fold], index: pd.DatetimeIndex = None) -> pd.DataFrame:
     """
-    Calculate percentage returns
+    Tabulate folds, optionally translating positions into dates.
 
     Args:
-        prices: Price series
+        folds: Folds from walk_forward_folds
+        index: The dataset's DatetimeIndex, to add date boundaries
 
     Returns:
-        Returns series
+        DataFrame with one row per fold
     """
-    return prices.pct_change()
+    frame = pd.DataFrame([f.as_dict() for f in folds])
+    frame['n_train'] = frame['train_end'] - frame['train_start']
+    frame['n_test'] = frame['test_end'] - frame['test_start']
+    frame['embargo'] = frame['test_start'] - frame['train_end']
+
+    if index is not None:
+        frame['train_start_date'] = [index[f.train_start].date() for f in folds]
+        frame['train_end_date'] = [index[f.train_end - 1].date() for f in folds]
+        frame['test_start_date'] = [index[f.test_start].date() for f in folds]
+        frame['test_end_date'] = [index[f.test_end - 1].date() for f in folds]
+
+    return frame
 
 
-def calculate_log_returns(prices: pd.Series) -> pd.Series:
+def save_artifact(artifact: Dict[str, Any], path: str) -> str:
     """
-    Calculate log returns
+    Persist the single artifact that train.py produces and predict.py consumes.
+
+    Bundling the fitted pipeline with the exact feature list and the config that
+    built it is what keeps inference honest: predict.py cannot accidentally
+    assemble a different feature set from the one the model was fitted on.
 
     Args:
-        prices: Price series
+        artifact: Must contain 'pipeline', 'feature_columns' and 'config'
+        path: Destination .joblib path
 
     Returns:
-        Log returns series
+        The path written
     """
-    return np.log(prices / prices.shift(1))
+    required = {'pipeline', 'feature_columns', 'config'}
+    missing = required - set(artifact)
+    if missing:
+        raise ValueError(f"Artifact is missing required keys: {sorted(missing)}")
+
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    joblib.dump(artifact, path)
+    return path
 
 
-def normalize_data(data: pd.DataFrame, method: str = 'standard') -> Tuple[pd.DataFrame, Any]:
+def load_artifact(path: str) -> Dict[str, Any]:
     """
-    Normalize data using specified method
+    Load a training artifact and check it carries what inference needs.
 
     Args:
-        data: Data to normalize
-        method: Normalization method ('standard', 'minmax', 'robust')
+        path: Path to a .joblib written by save_artifact
 
     Returns:
-        Tuple of (normalized_data, scaler)
+        The artifact dictionary
     """
-    from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
-
-    scalers = {
-        'standard': StandardScaler(),
-        'minmax': MinMaxScaler(),
-        'robust': RobustScaler()
-    }
-
-    scaler = scalers.get(method, StandardScaler())
-    normalized = pd.DataFrame(
-        scaler.fit_transform(data),
-        columns=data.columns,
-        index=data.index
-    )
-
-    return normalized, scaler
+    # joblib.load unpickles, so it executes code from the file. Only ever point
+    # this at artifacts this project's own train.py wrote under models/; treat a
+    # .joblib from anywhere else as untrusted and do not load it.
+    artifact = joblib.load(path)
+    if not isinstance(artifact, dict) or 'pipeline' not in artifact:
+        raise ValueError(
+            f"{path} is not a training artifact. Retrain with train.py to "
+            f"produce a pipeline + feature list bundle."
+        )
+    return artifact
 
 
-def print_metrics_table(metrics_dict: Dict[str, Dict[str, float]]) -> None:
-    """
-    Print metrics in a formatted table
-
-    Args:
-        metrics_dict: Dictionary of model names and their metrics
-    """
-    df = pd.DataFrame(metrics_dict).T
-    print("\n" + "="*80)
-    print("MODEL PERFORMANCE COMPARISON")
-    print("="*80)
-    print(df.to_string())
-    print("="*80 + "\n")
-
-
-def save_results(results: Dict[str, Any], filename: str, results_dir: str = "results") -> str:
-    """
-    Save results to disk
-
-    Args:
-        results: Results dictionary
-        filename: Name for results file
-        results_dir: Directory to save results
-
-    Returns:
-        Path to saved results
-    """
-    os.makedirs(results_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = os.path.join(results_dir, f"{filename}_{timestamp}.joblib")
-    joblib.dump(results, filepath)
-    return filepath

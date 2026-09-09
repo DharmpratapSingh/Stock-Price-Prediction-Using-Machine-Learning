@@ -1,383 +1,173 @@
 # Stock Price Prediction Using Machine Learning
 
-A production-ready, comprehensive stock price prediction system with proper time series methodology, extensive feature engineering, and realistic backtesting.
+Next-day closing-price prediction for a single ticker (NVDA by default), built twice: once as a short
+notebook that gets the naive version working end to end, and once as a `src/` pipeline that redoes it
+with chronological splits, ~96 engineered features, hyperparameter search over `TimeSeriesSplit` folds,
+and a backtest that charges commission and slippage.
 
-## Overview
+The most useful thing in this repository is not the R². It is the section below explaining why that R²
+is close to meaningless, and what should replace it.
 
-This project implements a professional-grade machine learning pipeline for stock price prediction, addressing common pitfalls in financial forecasting such as data leakage, improper time series handling, and unrealistic evaluation metrics. The system includes multiple models, extensive technical indicators, backtesting with transaction costs, and comprehensive evaluation metrics.
+## The headline number is a trap
 
-## Key Features
+These are the results actually recorded in the repo — the executed outputs of
+`Stock Price Prediction using Machine Learning.ipynb`, written up in
+`Stock Price Prediction Using Machine Learning.pdf`. NVDA, 2018-01-01 to 2024-01-01, 80/20 split,
+target = next day's closing price.
 
-- **No Data Leakage**: Proper use of lagged features and time series splitting
-- **Comprehensive Feature Engineering**: 60+ technical indicators including RSI, MACD, Bollinger Bands, ATR, and more
-- **Multiple Models**: Linear Regression, Random Forest, XGBoost, LightGBM, and LSTM
-- **Hyperparameter Tuning**: Integrated hyperparameter optimization with time series cross-validation
-- **Feature Selection**: Automatic feature selection to reduce overfitting and improve performance
-- **Model Ensembles**: Support for averaging, weighted, and stacking ensemble methods
-- **Data Caching**: Intelligent caching system to speed up repeated experiments
-- **Proper Time Series Methodology**: Chronological splitting and walk-forward validation
-- **Realistic Backtesting**: Includes commission, slippage, and transaction costs
-- **Extensive Metrics**: Statistical, directional, and financial performance metrics
-- **Comprehensive Testing**: Unit tests for all major components
-- **Production-Ready Code**: Modular architecture, configuration management, logging, and testing
+| Model | MSE | R² |
+|---|---|---|
+| Linear Regression | 0.4033 | 0.9975 |
+| Random Forest | 0.4954 | 0.9970 |
+| XGBoost | 0.6101 | 0.9963 |
 
-## Project Structure
+R² ≈ 0.997 looks like a solved problem. It is not, and two things in the repo's own artifacts give it away:
 
-```
-Stock-Price-Prediction-Using-Machine-Learning/
-├── src/
-│   ├── __init__.py
-│   ├── data_loader.py          # Data fetching and validation
-│   ├── feature_engineering.py   # Technical indicators and features
-│   ├── feature_selection.py     # Feature selection and correlation analysis
-│   ├── models.py                # ML model implementations
-│   ├── ensemble.py              # Model ensemble methods
-│   ├── cache.py                 # Data caching system
-│   ├── evaluation.py            # Comprehensive metrics
-│   ├── backtesting.py           # Trading simulation
-│   ├── visualize.py             # Visualization tools
-│   └── utils.py                 # Utility functions
-├── config/
-│   └── config.yaml              # Configuration file
-├── tests/
-│   ├── __init__.py
-│   ├── test_features.py         # Feature engineering tests
-│   ├── test_models.py           # Model tests
-│   ├── test_evaluation.py       # Evaluation metrics tests
-│   ├── test_backtesting.py      # Backtesting tests
-│   └── test_feature_selection.py # Feature selection tests
-├── notebooks/
-│   └── stock_prediction.ipynb   # Interactive notebook
-├── data/                        # Data directory (gitignored)
-├── models/                      # Saved models (gitignored)
-├── results/                     # Results and plots (gitignored)
-├── logs/                        # Log files (gitignored)
-├── cache/                      # Cache directory (gitignored)
-├── train.py                     # Training pipeline
-├── predict.py                   # Prediction service
-├── requirements.txt             # Dependencies
-├── .gitignore
-└── README.md
-```
+1. **Linear regression wins.** Over `[Close, Returns, 10-day MA, 50-day MA]`, a linear model can do
+   little more than emit a scaled copy of today's close. That it beats both tree ensembles means the
+   score is not rewarding learned structure.
+2. **`Close` carries roughly 0.88 of the Random Forest's feature importance** (the feature-importance
+   plot in the notebook and the PDF). The model's dominant input is today's price, and its output is
+   approximately today's price.
 
-## Installation
+Daily equity prices are close to a random walk: tomorrow's *level* is today's level plus a small
+increment. So the persistence forecast — "predict today's close for tomorrow" — already explains
+almost all the variance in price levels on its own. **R² computed on price levels is therefore
+measuring the autocorrelation of the price series, not forecasting skill.** A model can score 0.99 and
+be worth nothing, because the sliver it misses is the entire tradeable signal.
 
-### Prerequisites
+The honest comparison is cheap and this repo does not yet run it: score `ŷ(t+1) = Close(t)` with the
+same `r2_score` on the same test split, then report how much each model beats that baseline. If the
+gap is not material, the model is not adding anything. That delta, not the raw R², is the number this
+project should be judged on.
 
-- Python 3.8+
-- pip
+**What would actually be meaningful here:**
 
-### Setup
+- **Directional accuracy** — did the model get the sign of the move right? Only a durable margin over
+  50%, net of costs, is real. `ModelEvaluator.directional_accuracy` in `src/evaluation.py` computes it,
+  but no run in this repo has committed a value, so no directional number is claimed here.
+- **Predicting returns instead of levels.** `create_target_variable(..., target_type='return')` already
+  exists in `src/feature_engineering.py` and removes the persistence floor entirely. The pipeline
+  currently calls it with `target_type='price'`.
+- **Backtested return net of commission and slippage, against buy-and-hold.** `src/backtesting.py`
+  implements this. Again, no run is committed.
 
-1. Clone the repository:
+No backtest or directional figures appear in this README because there are no committed results to
+quote — `results/`, `models/` and `logs/` are gitignored.
+
+## What the pipeline does
+
+- **Data** — daily OHLCV from Yahoo Finance via `yfinance` (`src/data_loader.py`), with schema
+  validation, missing-value handling and outlier treatment.
+- **Features** — 96 engineered columns from `src/feature_engineering.py`: lags of O/H/L/C, simple and
+  log returns, SMA/EMA plus distance-from-MA, RSI, MACD, Bollinger Bands, ATR, stochastic oscillator,
+  OBV / VPT / volume ratio, realized and Parkinson volatility, candle body / shadows / gap, momentum
+  and ROC, rolling linear-regression trend slopes, and a simplified ADX. All hand-written in
+  pandas/numpy — TA-Lib is listed in `requirements.txt` but never imported.
+- **Target** — `Close.shift(-1)`, i.e. the next day's price *level*. See the section above.
+- **Split** — chronological only (`time_series_split` in `src/utils.py`): train, then validation, then
+  test, in time order, never shuffled.
+- **Models** — linear regression, random forest and XGBoost are trained by default; LightGBM and an
+  LSTM are also implemented in `src/models.py`. Tuning is `RandomizedSearchCV` over `TimeSeriesSplit`
+  folds (`ModelTuner`).
+- **Backtest** — `src/backtesting.py` runs a threshold strategy against buy-and-hold with 0.1%
+  commission and 0.05% slippage, and reports Sharpe, Sortino, Calmar, max drawdown, win rate and
+  profit factor.
+
+## Setup
+
 ```bash
-git clone https://github.com/yourusername/Stock-Price-Prediction-Using-Machine-Learning.git
+git clone https://github.com/DharmpratapSingh/Stock-Price-Prediction-Using-Machine-Learning.git
 cd Stock-Price-Prediction-Using-Machine-Learning
-```
-
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` is heavier than the code needs. TA-Lib (platform-specific and awkward to install),
+FastAPI and Streamlit are listed but never imported; TensorFlow is only needed for the LSTM. pandas,
+numpy, scikit-learn, xgboost, yfinance, pyyaml, joblib and matplotlib cover the default path.
+
 ## Usage
 
-### Training Models
+Everything is driven by `config/config.yaml` — ticker, date range, split fractions, feature
+parameters, hyperparameter grids, feature-selection method, and backtest costs.
 
-Train all models with default configuration (includes hyperparameter tuning and feature selection):
 ```bash
-python train.py
+python train.py                                  # linear regression, random forest, xgboost
+python train.py --model random_forest            # one model
+python train.py --config config/custom.yaml      # alternative config
 ```
 
-Train a specific model:
-```bash
-python train.py --model random_forest
-```
+Models are written to `models/<name>_<timestamp>.joblib`:
 
-Use custom configuration:
-```bash
-python train.py --config config/custom_config.yaml
-```
-
-**New Features in Training:**
-- **Hyperparameter Tuning**: Automatically optimizes model parameters using time series cross-validation
-- **Feature Selection**: Reduces feature set to most important features, reducing overfitting
-- **Model Ensembles**: Combine multiple models for better predictions (enable in config)
-- **Data Caching**: Speeds up repeated experiments by caching fetched data
-
-### Making Predictions
-
-Interactive mode:
 ```bash
 python predict.py --interactive
-```
-
-Predict with a specific model:
-```bash
 python predict.py --model models/random_forest_20240101_120000.joblib --symbol NVDA
-```
-
-Batch predictions for multiple stocks:
-```bash
 python predict.py --model models/random_forest_20240101_120000.joblib --batch --symbols NVDA AMD TSM INTC
 ```
 
-### Running Tests
+`predict.py` also accepts `--days N`, `--config`, and `--no-plot`. Tests: `pytest tests/ -v`.
 
-```bash
-pytest tests/ -v
+## Known issues
+
+Written down rather than papered over. Roughly the order I would fix them in.
+
+1. **`train.py` does not currently run end to end.** `FeatureEngineer.create_all_features` looks for
+   `config['bollinger']` and `config['stochastic']`, but `config/config.yaml` spells those as
+   `bollinger_window` / `bollinger_std` / `stoch_k` / `stoch_d`. The fallback dicts then use keyword
+   names the methods do not accept (`std`, `k`, `d` instead of `num_std`, `k_period`, `d_period`), so
+   feature engineering raises `TypeError: create_bollinger_bands() got an unexpected keyword argument
+   'std'`. The same mis-plumbing means the configured MACD, Bollinger and stochastic periods are
+   silently ignored.
+2. **`predict.py` builds a different feature set than `train.py`.** Training drops `Open`/`High`/`Low`
+   and then applies feature selection; prediction keeps them and selects nothing, so a model saved by
+   `train.py` is handed the wrong number of columns at inference time.
+3. **Feature selection sees the test set.** `train.py` selects features on the full dataset *before*
+   the chronological split, leaking test-period information into which features are kept. It should be
+   fit on the training window only.
+4. **Outlier cleaning uses full-sample statistics.** `handle_outliers` clips returns at ±3σ using the
+   mean and standard deviation of the entire series, then rebuilds `Close` from the clipped returns —
+   so test-period statistics touch the training data, and `Close` no longer reconciles with
+   `Open`/`High`/`Low`.
+5. **The backtest signal is not what its docstring describes.** `Backtester.simple_strategy` derives
+   its signal from the change between *consecutive predictions*, not from the prediction relative to
+   today's price — closer to momentum in the forecast than to a forecast-versus-spot signal.
+6. **Walk-forward validation is implemented but not wired in.** `walk_forward_validation` and
+   `WalkForwardBacktester` exist; setting `training.use_walk_forward: true` logs a note and proceeds
+   with the standard split anyway.
+7. Single ticker, single one-day horizon, no regime awareness, no position sizing or risk limits, and
+   no sensitivity analysis on transaction costs.
+
+## Layout
+
+```
+├── src/
+│   ├── data_loader.py          # yfinance fetch, validation, cleaning
+│   ├── feature_engineering.py  # technical indicators + target construction
+│   ├── feature_selection.py    # correlation / importance / mutual-info / RFE
+│   ├── models.py               # model wrappers + RandomizedSearchCV tuner
+│   ├── ensemble.py             # average / weighted / stacking
+│   ├── cache.py                # on-disk cache for fetched data
+│   ├── evaluation.py           # statistical, directional and financial metrics
+│   ├── backtesting.py          # cost-aware trading simulation
+│   ├── visualize.py            # plots
+│   └── utils.py                # config, logging, chronological split, persistence
+├── config/config.yaml
+├── tests/                      # pytest suites for features, models, evaluation,
+│                               # backtesting, feature selection
+├── train.py                    # training pipeline
+├── predict.py                  # prediction CLI
+├── Stock Price Prediction using Machine Learning.ipynb   # original baseline notebook
+└── Stock Price Prediction Using Machine Learning.pdf     # write-up of that notebook
 ```
 
-## Methodology
-
-### 1. Data Collection
-
-- Fetches historical stock data from Yahoo Finance API
-- Validates data quality (missing values, outliers, anomalies)
-- Handles stock splits and dividends
-- Cleans and preprocesses data
-
-### 2. Feature Engineering (60+ Features)
-
-#### Price-Based Features
-- **Lagged prices**: Close_lag_1, Close_lag_2, etc.
-- **Returns**: Daily, weekly, monthly returns
-- **Moving Averages**: SMA (10, 20, 50, 100, 200), EMA (12, 26, 50)
-
-#### Technical Indicators
-- **RSI**: Relative Strength Index (14-period)
-- **MACD**: Moving Average Convergence Divergence
-- **Bollinger Bands**: Upper, Middle, Lower bands + %B
-- **ATR**: Average True Range (volatility)
-- **Stochastic Oscillator**: %K and %D
-- **ADX**: Average Directional Index
-
-#### Volume Indicators
-- Volume moving averages
-- On-Balance Volume (OBV)
-- Volume Price Trend (VPT)
-- Volume Rate of Change
-
-#### Pattern Recognition
-- Candlestick patterns
-- Support/Resistance levels
-- Trend slopes
-
-### 3. Feature Selection
-
-The system includes comprehensive feature selection capabilities:
-
-- **Correlation-based**: Removes highly correlated features to reduce multicollinearity
-- **Importance-based**: Selects top features based on model importance scores
-- **Mutual Information**: Uses information-theoretic measures to select features
-- **RFE (Recursive Feature Elimination)**: Iteratively removes least important features
-- **Model-based**: Uses trained models to select features
-
-Feature selection is automatically performed during training and can be configured in `config.yaml`.
-
-### 4. Model Training
-
-#### Available Models
-1. **Linear Regression**: Baseline model
-2. **Random Forest**: Ensemble tree-based model
-3. **XGBoost**: Gradient boosting
-4. **LightGBM**: Fast gradient boosting
-5. **LSTM**: Deep learning for time series
-
-#### Training Features
-- **Hyperparameter Tuning**: Automatic optimization using time series cross-validation
-  - Random Search or Grid Search
-  - Configurable number of iterations and CV folds
-  - Model-specific parameter grids
-- **Feature Selection**: Automatic reduction of feature set
-- **Model Ensembles**: Combine multiple models for improved predictions
-  - Average: Simple average of predictions
-  - Weighted: Weighted average based on validation performance
-  - Stacking: Meta-learner trained on base model predictions
-- Time series cross-validation
-- Feature importance analysis
-- Model persistence
-- Data caching for faster iteration
-
-### 5. Evaluation
-
-#### Statistical Metrics
-- MSE, RMSE, MAE, MAPE
-- R² Score
-- Explained Variance
-
-#### Prediction Quality
-- Directional Accuracy
-- Theil's U Statistic
-- Mean Directional Error
-
-#### Financial Metrics
-- Sharpe Ratio
-- Sortino Ratio
-- Maximum Drawdown
-- Calmar Ratio
-- Win Rate
-- Profit Factor
-
-### 6. Backtesting
-
-- Initial capital: $100,000
-- Commission: 0.1% per trade
-- Slippage: 0.05% per trade
-- Walk-forward validation
-- Comparison with Buy & Hold strategy
-
-## Results
-
-### Model Performance (NVDA 2018-2024)
-
-| Model | R² | RMSE | MAE | Directional Accuracy |
-|-------|-----|------|-----|---------------------|
-| Random Forest | 0.985 | 3.45 | 2.12 | 67.3% |
-| XGBoost | 0.982 | 3.78 | 2.34 | 65.8% |
-| LightGBM | 0.980 | 3.92 | 2.45 | 64.5% |
-| Linear Regression | 0.875 | 9.23 | 6.78 | 58.2% |
-
-### Backtesting Results
-
-| Strategy | Total Return | Sharpe Ratio | Max Drawdown | Win Rate |
-|----------|-------------|--------------|--------------|----------|
-| ML Strategy | 145.3% | 1.87 | -18.4% | 58.3% |
-| Buy & Hold | 287.5% | 2.14 | -31.2% | N/A |
-
-*Note: Results will vary based on market conditions and time period.*
-
-## Configuration
-
-Edit `config/config.yaml` to customize:
-
-- **Data Settings**: Stock symbol, date range, train/test splits
-- **Feature Engineering**: Technical indicator parameters
-- **Feature Selection**: Method, top_k, correlation threshold
-- **Model Hyperparameters**: Parameter grids for tuning
-- **Hyperparameter Tuning**: Method (random/grid), CV folds, iterations
-- **Ensemble Settings**: Enable/disable, method, model selection
-- **Caching**: Enable/disable, cache directory, TTL
-- **Backtesting**: Capital, commission, slippage
-- **Paths and Logging**: Directory paths, log levels
-
-### New Configuration Options
-
-```yaml
-# Feature Selection
-feature_selection:
-  enabled: true
-  method: "correlation"  # correlation, importance, mutual_info, rfe, model_based
-  top_k: 50
-  correlation_threshold: 0.95
-
-# Caching
-cache:
-  enabled: true
-  cache_dir: "cache"
-  ttl_days: 1
-
-# Ensemble
-ensemble:
-  enabled: false
-  method: "average"  # average, weighted, stacking
-  models: ["random_forest", "xgboost", "lightgbm"]
-
-# Training Options
-training:
-  use_hyperparameter_tuning: true
-  use_walk_forward: false
-  use_feature_selection: true
-```
-
-## Important Notes
-
-### Data Leakage Prevention
-
-This implementation specifically addresses the critical issue of data leakage:
-
-- **No future information**: Only lagged features are used
-- **Proper time series split**: Chronological ordering maintained
-- **Walk-forward validation**: Models retrained on rolling windows
-
-### Limitations
-
-- Past performance doesn't guarantee future results
-- Models trained on historical data may not capture regime changes
-- Transaction costs and slippage estimates may not reflect real trading
-- Market conditions change; regular retraining recommended
-- Not financial advice; for educational purposes only
-
-## Dependencies
-
-Key libraries:
-- pandas, numpy: Data manipulation
-- scikit-learn: Machine learning
-- xgboost, lightgbm: Gradient boosting
-- tensorflow/keras: Deep learning
-- yfinance: Data fetching
-- matplotlib, seaborn: Visualization
-- pytest: Testing
-
-See `requirements.txt` for complete list.
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
-## Recent Improvements (v2.1.0)
-
-✅ **Hyperparameter Tuning**: Integrated automatic hyperparameter optimization
-✅ **Feature Selection**: Multiple methods for reducing feature dimensionality
-✅ **Model Ensembles**: Support for averaging, weighted, and stacking ensembles
-✅ **Data Caching**: Intelligent caching system for faster development
-✅ **Comprehensive Testing**: Expanded test coverage for all major components
-✅ **Enhanced Configuration**: More granular control over training process
-
-## Future Enhancements
-
-- [ ] Sentiment analysis from news and social media
-- [ ] Multi-asset portfolio optimization
-- [ ] Real-time prediction API
-- [ ] Web dashboard with Streamlit/Dash
-- [ ] Options pricing models
-- [ ] Alternative data sources (economic indicators, etc.)
-- [ ] Automated model retraining pipeline
-- [ ] Advanced risk management features
-- [ ] Portfolio optimization strategies
-
-## License
-
-MIT License - see LICENSE file for details
+`data/`, `models/`, `results/`, `logs/` and `cache/` are created at runtime and gitignored.
 
 ## Disclaimer
 
-This project is for educational purposes only. It is not financial advice. Stock trading involves risk, and past performance does not guarantee future results. Always do your own research and consult with financial professionals before making investment decisions.
+Educational project. Not investment advice, and not something to trade with. Historical results —
+including the ones above — do not predict future returns.
 
-## Contact
+## License
 
-For questions or feedback, please open an issue on GitHub.
-
-## Acknowledgments
-
-- Data provided by Yahoo Finance API
-- Built with scikit-learn, XGBoost, and TensorFlow
-- Inspired by quantitative finance research and best practices
-
----
-
-**Version**: 2.1.0
-**Last Updated**: 2024
-**Status**: Production-Ready (Enhanced)
+MIT.

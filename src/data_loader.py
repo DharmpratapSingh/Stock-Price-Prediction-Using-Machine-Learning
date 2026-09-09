@@ -1,358 +1,290 @@
 """
-Data loading and validation module
-Handles fetching stock data with proper error handling and validation
+Data loading and validation module.
+
+Daily OHLCV data is read from committed CSV snapshots under ``data/raw`` so that
+every number in ``results/`` reproduces offline and without a network call. The
+network is only touched when a caller explicitly opts in via
+``allow_download=True`` (or ``refresh_snapshots.py``-style tooling).
+
+Design note on cleaning: this module deliberately does NOT clip returns and
+rebuild ``Close``. Doing so with full-sample mean/standard deviation lets
+test-period statistics touch the training window, and a rebuilt ``Close`` no
+longer reconciles with ``Open``/``High``/``Low``. Extreme moves are *reported*
+here; any clipping that a model needs is a train-window-only transform fitted
+inside the modelling pipeline (see ``src.models.WindowedWinsorizer``).
 """
 
-import yfinance as yf
-import pandas as pd
-import numpy as np
-from typing import Optional, Tuple
+from __future__ import annotations
+
 import logging
+import os
+from typing import List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+OHLCV_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
+DEFAULT_SNAPSHOT_DIR = "data/raw"
+
+
+def snapshot_path(symbol: str, snapshot_dir: str = DEFAULT_SNAPSHOT_DIR) -> str:
+    """Return the CSV snapshot path for a ticker."""
+    return os.path.join(snapshot_dir, f"{symbol.upper()}.csv")
+
+
+def read_snapshot(symbol: str, snapshot_dir: str = DEFAULT_SNAPSHOT_DIR) -> pd.DataFrame:
+    """
+    Read a committed OHLCV snapshot from disk.
+
+    Args:
+        symbol: Ticker symbol
+        snapshot_dir: Directory holding ``<TICKER>.csv`` files
+
+    Returns:
+        DataFrame indexed by tz-naive ``Date`` with OHLCV columns
+    """
+    path = snapshot_path(symbol, snapshot_dir)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"No snapshot for {symbol} at {path}. "
+            f"Run with allow_download=True to fetch it from Yahoo Finance."
+        )
+
+    data = pd.read_csv(path, parse_dates=["Date"], index_col="Date")
+    data.index = pd.DatetimeIndex(data.index).tz_localize(None)
+    data.index.name = "Date"
+    data = data[[c for c in OHLCV_COLUMNS if c in data.columns]]
+    return data.sort_index()
+
+
+def download_snapshot(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    snapshot_dir: str = DEFAULT_SNAPSHOT_DIR,
+    write: bool = True,
+) -> pd.DataFrame:
+    """
+    Fetch split/dividend-adjusted daily OHLCV from Yahoo Finance and cache it.
+
+    This is the only function in the project that reaches the network.
+
+    Args:
+        symbol: Ticker symbol
+        start_date: Start date (YYYY-MM-DD), inclusive
+        end_date: End date (YYYY-MM-DD), exclusive per yfinance semantics
+        snapshot_dir: Where to write ``<TICKER>.csv``
+        write: Whether to persist the snapshot
+
+    Returns:
+        DataFrame indexed by tz-naive ``Date`` with OHLCV columns
+    """
+    import yfinance as yf  # imported lazily: offline runs never need it
+
+    logger.info("Downloading %s from %s to %s", symbol, start_date, end_date)
+    data = yf.Ticker(symbol).history(
+        start=start_date, end=end_date, interval="1d", auto_adjust=True
+    )
+    if data.empty:
+        raise ValueError(f"No data returned for {symbol}")
+
+    data = data[OHLCV_COLUMNS].copy()
+    data.index = pd.DatetimeIndex(data.index).tz_localize(None)
+    data.index.name = "Date"
+
+    if write:
+        os.makedirs(snapshot_dir, exist_ok=True)
+        data.to_csv(snapshot_path(symbol, snapshot_dir), float_format="%.6f")
+        logger.info("Wrote snapshot for %s (%d rows)", symbol, len(data))
+
+    return data
+
 
 class StockDataLoader:
-    """
-    Handles loading and validating stock market data
-    """
+    """Loads and validates daily OHLCV data for one ticker."""
 
-    def __init__(self, symbol: str, start_date: str, end_date: str):
-        """
-        Initialize data loader
-
-        Args:
-            symbol: Stock ticker symbol
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
-        """
+    def __init__(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        snapshot_dir: str = DEFAULT_SNAPSHOT_DIR,
+    ):
         self.symbol = symbol
         self.start_date = start_date
         self.end_date = end_date
-        self.data = None
+        self.snapshot_dir = snapshot_dir
+        self.data: Optional[pd.DataFrame] = None
 
-    def fetch_data(self, interval: str = "1d") -> pd.DataFrame:
+    def load(self, allow_download: bool = False) -> pd.DataFrame:
         """
-        Fetch stock data from Yahoo Finance
+        Load OHLCV data, preferring the committed snapshot.
 
         Args:
-            interval: Data interval (1d, 1h, etc.)
+            allow_download: If True, fall back to the network when no snapshot
+                exists. Defaults to False so runs stay reproducible and offline.
 
         Returns:
-            DataFrame with stock data
+            DataFrame restricted to ``[start_date, end_date]``
         """
-        logger.info(f"Fetching data for {self.symbol} from {self.start_date} to {self.end_date}")
-
         try:
-            ticker = yf.Ticker(self.symbol)
-            data = ticker.history(
-                start=self.start_date,
-                end=self.end_date,
-                interval=interval
+            data = read_snapshot(self.symbol, self.snapshot_dir)
+            logger.info("Loaded %s from snapshot (%d rows)", self.symbol, len(data))
+        except FileNotFoundError:
+            if not allow_download:
+                raise
+            data = download_snapshot(
+                self.symbol, self.start_date, self.end_date, self.snapshot_dir
             )
 
-            if data.empty:
-                raise ValueError(f"No data fetched for {self.symbol}")
+        data = data.loc[
+            (data.index >= pd.Timestamp(self.start_date))
+            & (data.index <= pd.Timestamp(self.end_date))
+        ]
+        if data.empty:
+            raise ValueError(
+                f"Snapshot for {self.symbol} has no rows in "
+                f"[{self.start_date}, {self.end_date}]"
+            )
 
-            logger.info(f"Successfully fetched {len(data)} data points")
-            self.data = data
+        self.data = data
+        return data
 
-            return data
-
-        except Exception as e:
-            logger.error(f"Error fetching data: {str(e)}")
-            raise
-
-    def validate_data(self, data: Optional[pd.DataFrame] = None) -> Tuple[bool, list]:
+    def validate_data(self, data: Optional[pd.DataFrame] = None) -> Tuple[bool, List[str]]:
         """
-        Validate data quality
-
-        Args:
-            data: DataFrame to validate (uses self.data if None)
+        Check data quality. Reports problems; never silently rewrites prices.
 
         Returns:
-            Tuple of (is_valid, list of issues)
+            (is_valid, list of human-readable issues)
         """
         if data is None:
             data = self.data
-
         if data is None:
             return False, ["No data loaded"]
 
-        issues = []
+        issues: List[str] = []
 
-        # Check for missing values
         missing = data.isnull().sum()
         if missing.any():
-            issues.append(f"Missing values detected: {missing[missing > 0].to_dict()}")
+            issues.append(f"Missing values: {missing[missing > 0].to_dict()}")
 
-        # Check for duplicate indices
         if data.index.duplicated().any():
             issues.append("Duplicate dates detected")
 
-        # Check for negative prices
-        price_columns = ['Open', 'High', 'Low', 'Close']
-        for col in price_columns:
+        if not data.index.is_monotonic_increasing:
+            issues.append("Index is not sorted ascending")
+
+        for col in ["Open", "High", "Low", "Close"]:
             if col in data.columns and (data[col] <= 0).any():
-                issues.append(f"Negative or zero values in {col}")
+                issues.append(f"Non-positive values in {col}")
 
-        # Check for data consistency (High >= Low, etc.)
-        if 'High' in data.columns and 'Low' in data.columns:
-            if (data['High'] < data['Low']).any():
-                issues.append("High price less than Low price detected")
+        if {"High", "Low"} <= set(data.columns) and (data["High"] < data["Low"]).any():
+            issues.append("High below Low detected")
 
-        # Check for outliers (prices changed by more than 50% in one day)
-        if 'Close' in data.columns:
-            pct_change = data['Close'].pct_change().abs()
-            outliers = pct_change > 0.5
-            if outliers.any():
-                issues.append(f"Extreme price changes detected: {outliers.sum()} occurrences")
+        n_extreme = int(self.flag_extreme_moves(data).sum())
+        if n_extreme:
+            issues.append(f"Extreme daily moves (>50%): {n_extreme}")
 
-        # Check data continuity (no large gaps)
-        date_diff = data.index.to_series().diff()
-        expected_diff = pd.Timedelta(days=1)
-        large_gaps = date_diff > pd.Timedelta(days=7)
-        if large_gaps.any():
-            issues.append(f"Large time gaps detected: {large_gaps.sum()} gaps")
-
-        is_valid = len(issues) == 0
-
+        is_valid = not issues
         if is_valid:
-            logger.info("Data validation passed")
+            logger.info("Data validation passed for %s", self.symbol)
         else:
-            logger.warning(f"Data validation found {len(issues)} issues:")
             for issue in issues:
-                logger.warning(f"  - {issue}")
+                logger.warning("%s: %s", self.symbol, issue)
 
         return is_valid, issues
 
+    @staticmethod
+    def flag_extreme_moves(data: pd.DataFrame, threshold: float = 0.5) -> pd.Series:
+        """
+        Flag days whose close-to-close move exceeds ``threshold``.
+
+        Reporting only. Prices are never modified, so ``Close`` always stays
+        consistent with ``Open``/``High``/``Low``.
+        """
+        if "Close" not in data.columns:
+            return pd.Series(False, index=data.index)
+        return data["Close"].pct_change().abs() > threshold
+
     def handle_missing_data(self, method: str = "ffill") -> pd.DataFrame:
         """
-        Handle missing data
+        Fill gaps in an otherwise-valid series.
 
-        Args:
-            method: Method to handle missing data (ffill, bfill, interpolate, drop)
-
-        Returns:
-            DataFrame with missing data handled
+        Only forward fill and dropping are offered: back-filling a price series
+        copies future prices into the past, which is lookahead.
         """
         if self.data is None:
             raise ValueError("No data loaded")
-
-        data = self.data.copy()
 
         if method == "ffill":
-            data = data.fillna(method='ffill')
-        elif method == "bfill":
-            data = data.fillna(method='bfill')
-        elif method == "interpolate":
-            data = data.interpolate(method='linear')
+            self.data = self.data.ffill()
         elif method == "drop":
-            data = data.dropna()
+            self.data = self.data.dropna()
         else:
-            raise ValueError(f"Unknown method: {method}")
-
-        logger.info(f"Missing data handled using {method}")
-        self.data = data
-
-        return data
-
-    def handle_outliers(self, method: str = "clip", threshold: float = 3.0) -> pd.DataFrame:
-        """
-        Handle outliers in the data
-
-        Args:
-            method: Method to handle outliers (clip, remove, winsorize)
-            threshold: Z-score threshold for outlier detection
-
-        Returns:
-            DataFrame with outliers handled
-        """
-        if self.data is None:
-            raise ValueError("No data loaded")
-
-        data = self.data.copy()
-
-        # Calculate returns to detect outliers
-        returns = data['Close'].pct_change()
-
-        if method == "clip":
-            # Clip extreme returns
-            mean = returns.mean()
-            std = returns.std()
-            lower = mean - threshold * std
-            upper = mean + threshold * std
-            returns_clipped = returns.clip(lower, upper)
-
-            # Reconstruct prices
-            data['Close'] = data['Close'].iloc[0] * (1 + returns_clipped).cumprod()
-
-        elif method == "remove":
-            # Remove outlier rows
-            z_scores = np.abs((returns - returns.mean()) / returns.std())
-            data = data[z_scores < threshold]
-
-        elif method == "winsorize":
-            from scipy.stats import mstats
-            returns_win = mstats.winsorize(returns.dropna(), limits=[0.05, 0.05])
-            data.loc[returns.notna(), 'Returns'] = returns_win
-
-        logger.info(f"Outliers handled using {method}")
-        self.data = data
-
-        return data
-
-    def adjust_for_splits_and_dividends(self) -> pd.DataFrame:
-        """
-        Ensure data is adjusted for stock splits and dividends
-
-        Returns:
-            Adjusted DataFrame
-        """
-        if self.data is None:
-            raise ValueError("No data loaded")
-
-        # yfinance already provides adjusted close
-        # We'll use adjusted close if available
-        if 'Adj Close' in self.data.columns:
-            logger.info("Using adjusted close prices")
-            # Replace Close with Adj Close
-            self.data['Close'] = self.data['Adj Close']
+            raise ValueError(
+                f"Unsupported method: {method!r}. Use 'ffill' or 'drop'; "
+                f"back-filling prices would leak future information."
+            )
 
         return self.data
-
-    def get_clean_data(
-        self,
-        handle_missing: str = "ffill",
-        handle_outliers: bool = True,
-        outlier_method: str = "clip"
-    ) -> pd.DataFrame:
-        """
-        Get clean, validated data ready for feature engineering
-
-        Args:
-            handle_missing: Method to handle missing data
-            handle_outliers: Whether to handle outliers
-            outlier_method: Method to handle outliers
-
-        Returns:
-            Clean DataFrame
-        """
-        if self.data is None:
-            self.fetch_data()
-
-        # Validate
-        is_valid, issues = self.validate_data()
-
-        # Handle missing data
-        if not is_valid and any("Missing" in issue for issue in issues):
-            self.handle_missing_data(method=handle_missing)
-
-        # Adjust for splits and dividends
-        self.adjust_for_splits_and_dividends()
-
-        # Handle outliers
-        if handle_outliers:
-            self.handle_outliers(method=outlier_method)
-
-        # Final validation
-        is_valid, issues = self.validate_data()
-
-        if not is_valid:
-            logger.warning("Data still has issues after cleaning:")
-            for issue in issues:
-                logger.warning(f"  - {issue}")
-
-        logger.info(f"Final clean data shape: {self.data.shape}")
-
-        return self.data
-
-    def get_multiple_stocks(
-        self,
-        symbols: list,
-        column: str = 'Close'
-    ) -> pd.DataFrame:
-        """
-        Fetch data for multiple stocks
-
-        Args:
-            symbols: List of stock symbols
-            column: Which column to extract
-
-        Returns:
-            DataFrame with multiple stock prices
-        """
-        logger.info(f"Fetching data for {len(symbols)} stocks")
-
-        data_dict = {}
-
-        for symbol in symbols:
-            try:
-                loader = StockDataLoader(symbol, self.start_date, self.end_date)
-                stock_data = loader.get_clean_data()
-                data_dict[symbol] = stock_data[column]
-            except Exception as e:
-                logger.error(f"Failed to fetch {symbol}: {str(e)}")
-
-        combined = pd.DataFrame(data_dict)
-        logger.info(f"Combined data shape: {combined.shape}")
-
-        return combined
 
 
 def load_stock_data(
     symbol: str,
     start_date: str,
     end_date: str,
+    snapshot_dir: str = DEFAULT_SNAPSHOT_DIR,
+    allow_download: bool = False,
     validate: bool = True,
-    clean: bool = True,
-    use_cache: bool = True
 ) -> pd.DataFrame:
     """
-    Convenience function to load stock data
+    Load one ticker's daily OHLCV, snapshot-first.
 
     Args:
-        symbol: Stock ticker symbol
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
-        validate: Whether to validate data
-        clean: Whether to clean data
-        use_cache: Whether to use caching
+        symbol: Ticker symbol
+        start_date: Inclusive start date (YYYY-MM-DD)
+        end_date: Inclusive end date (YYYY-MM-DD)
+        snapshot_dir: Directory of committed CSV snapshots
+        allow_download: Permit a network fetch when no snapshot exists
+        validate: Log data-quality issues after loading
 
     Returns:
-        DataFrame with stock data
+        DataFrame indexed by date with OHLCV columns
     """
-    # Try to load from cache
-    if use_cache:
-        try:
-            from src.cache import get_cache
-            cache = get_cache()
-            cached_data = cache.get(symbol, start_date, end_date, "raw")
-            if cached_data is not None:
-                logger.info(f"Loaded {symbol} data from cache")
-                return cached_data
-        except Exception as e:
-            logger.warning(f"Cache error: {str(e)}, fetching fresh data")
+    loader = StockDataLoader(symbol, start_date, end_date, snapshot_dir)
+    data = loader.load(allow_download=allow_download)
 
-    loader = StockDataLoader(symbol, start_date, end_date)
-
-    if clean:
-        data = loader.get_clean_data()
-    else:
-        data = loader.fetch_data()
+    if data.isnull().values.any():
+        loader.handle_missing_data("ffill")
+        data = loader.data
 
     if validate:
-        is_valid, issues = loader.validate_data(data)
-        if not is_valid:
-            logger.warning(f"Data validation issues: {issues}")
-
-    # Cache the data
-    if use_cache:
-        try:
-            from src.cache import get_cache
-            cache = get_cache()
-            cache.set(data, symbol, start_date, end_date, "raw")
-        except Exception as e:
-            logger.warning(f"Cache error: {str(e)}")
+        loader.validate_data(data)
 
     return data
+
+
+def load_basket(
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    snapshot_dir: str = DEFAULT_SNAPSHOT_DIR,
+    allow_download: bool = False,
+) -> dict:
+    """
+    Load several tickers into a ``{symbol: DataFrame}`` mapping.
+
+    Each ticker is modelled independently; nothing is pooled at load time.
+    """
+    out = {}
+    for symbol in symbols:
+        try:
+            out[symbol] = load_stock_data(
+                symbol, start_date, end_date, snapshot_dir, allow_download
+            )
+        except Exception as exc:  # pragma: no cover - surfaced to the caller
+            logger.error("Failed to load %s: %s", symbol, exc)
+            raise
+    return out

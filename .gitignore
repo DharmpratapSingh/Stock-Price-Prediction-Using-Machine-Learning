@@ -43,16 +43,17 @@ venv.bak/
 *.ipynb_checkpoints
 
 # Data
-data/
-!data/.gitkeep
+# The raw OHLCV snapshots under data/raw are COMMITTED on purpose: every number
+# in results/ reproduces offline, with no network call and no yfinance drift.
+data/*
+!data/raw/
+data/raw/*
+!data/raw/*.csv
 
-# Models
+# Models: regenerate with train.py, so not committed
 models/
-!models/.gitkeep
 
-# Results
-results/
-!results/.gitkeep
+# results/ is committed -- the tables and figures the README quotes live there.
 
 # Logs
 logs/

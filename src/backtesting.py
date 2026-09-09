@@ -77,7 +77,7 @@ class Backtester:
         pred_returns = np.diff(predictions) / predictions[:-1]
         pred_returns = np.concatenate([[0], pred_returns])
 
-        for i in range(1, len(predictions)):
+        for i in range(len(predictions)):
             current_price = actuals[i]
             pred_return = pred_returns[i]
 

@@ -467,10 +467,20 @@ class FeatureEngineer:
         sma_windows = config.get('sma_windows', [10, 20, 50, 100, 200])
         ema_windows = config.get('ema_windows', [12, 26, 50])
         rsi_period = config.get('rsi_period', 14)
-        macd_config = config.get('macd', {'fast': 12, 'slow': 26, 'signal': 9})
-        bb_config = config.get('bollinger', {'window': 20, 'std': 2})
+        macd_config = {
+            'fast': config.get('macd_fast', 12),
+            'slow': config.get('macd_slow', 26),
+            'signal': config.get('macd_signal', 9)
+        }
+        bb_config = {
+            'window': config.get('bollinger_window', 20),
+            'num_std': config.get('bollinger_std', 2)
+        }
         atr_period = config.get('atr_period', 14)
-        stoch_config = config.get('stochastic', {'k': 14, 'd': 3})
+        stoch_config = {
+            'k_period': config.get('stoch_k', 14),
+            'd_period': config.get('stoch_d', 3)
+        }
 
         # Create all feature types
         self.create_lag_features(columns=['Close', 'Open', 'High', 'Low'], lags=lag_periods)

@@ -3,6 +3,8 @@ Model implementations for stock price prediction
 Includes traditional ML and deep learning models
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple, Optional

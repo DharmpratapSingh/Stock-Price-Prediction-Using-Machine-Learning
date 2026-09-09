@@ -63,33 +63,18 @@ backtesting:
   threshold: 0.0       # Minimum forecast log return required to hold the position
   cost_grid_bps: [0, 5, 10, 20]  # Per-side cost sensitivity sweep
 
-# Evaluation Metrics
+# Evaluation
 evaluation:
-  metrics:
-    - "rmse"
-    - "r2"
-    - "directional_accuracy"
-    - "sharpe_ratio"
-    - "max_drawdown"
-  confidence: 0.95
+  confidence: 0.95     # Coverage for Wilson intervals on directional accuracy
 
 # Paths
 paths:
-  data_dir: "data"
   models_dir: "models"
   results_dir: "results"
-  logs_dir: "logs"
 
 # Logging
 logging:
   level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# Visualization
-visualization:
-  style: "seaborn"
-  figure_size: [14, 8]
-  dpi: 100
 
 # Feature Selection
 # Selection runs INSIDE the fitted pipeline, on the training window only.
@@ -107,9 +92,7 @@ training:
   step_size: 63        # Advance one quarter per fold
   expanding: true      # Expanding window; false gives a rolling window
   # Embargo between train end and test start. "auto" uses the feature warm-up
-  # length (the deepest rolling lookback), so no test feature row is computed
-  # from a row used in training.
+  # length (the deepest rolling lookback) plus the forecast horizon, so the raw
+  # bars behind the training and test windows are strictly disjoint.
   embargo: "auto"
 
-# Random seed for reproducibility
-random_seed: 42

@@ -55,7 +55,8 @@ def ohlcv():
 # (i) No lookahead in features
 # ----------------------------------------------------------------------
 
-def test_features_use_no_future_data(ohlcv):
+@pytest.mark.parametrize("cut", [300, 600, 900])
+def test_features_use_no_future_data(ohlcv, cut):
     """
     Truncating the price series must not change any earlier feature value.
 
@@ -63,8 +64,11 @@ def test_features_use_no_future_data(ohlcv):
     shift with the wrong sign -- then removing the tail would change rows before
     the cut. Recomputing on a truncated series and comparing the overlap is a
     direct test of the property the whole project depends on.
+
+    Several cut points are used because a single one can be passed by an
+    interior leak: a back-fill or interpolation that only reaches a few rows
+    backwards shows up at some cuts and not others.
     """
-    cut = 600
     full = FeatureEngineer(ohlcv).create_all_features(dropna=False)
     truncated = FeatureEngineer(ohlcv.iloc[:cut]).create_all_features(dropna=False)
 
@@ -74,6 +78,25 @@ def test_features_use_no_future_data(ohlcv):
     pd.testing.assert_frame_equal(
         full.loc[overlap], truncated, check_exact=False, rtol=1e-10, atol=1e-12
     )
+
+
+def test_a_planted_backfill_would_be_caught(ohlcv):
+    """
+    Negative control: confirm the truncation test can actually fail.
+
+    A test that passes no matter what is worth nothing, so this plants a leak --
+    a backward-filled column that copies a future value into the past -- and
+    asserts the comparison rejects it.
+    """
+    leaked_full = ohlcv["Close"].shift(-3).bfill()
+    leaked_cut = ohlcv.iloc[:600]["Close"].shift(-3).bfill()
+
+    with pytest.raises(AssertionError):
+        pd.testing.assert_frame_equal(
+            leaked_full.loc[leaked_cut.index].to_frame(),
+            leaked_cut.to_frame(),
+            check_exact=False, rtol=1e-10, atol=1e-12,
+        )
 
 
 def test_every_engineered_column_is_covered_by_the_lookahead_check(ohlcv):

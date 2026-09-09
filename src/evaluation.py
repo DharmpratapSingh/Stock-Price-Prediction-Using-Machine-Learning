@@ -1,437 +1,44 @@
 """
-Comprehensive evaluation metrics for stock price prediction models
+Evaluation metrics for next-day return forecasts.
+
+Three groups of functions:
+
+*Return regression* -- ``return_regression_metrics`` scores log-return forecasts
+and reports R2 against a zero forecast alongside the usual R2.
+
+*Direction* -- ``direction_metrics`` attaches a Wilson interval and significance
+tests. Comparisons against a rival predictor on the same rows use McNemar's test
+(paired), not a one-sample binomial (unpaired).
+
+*Panel dependence* -- ``design_effect`` and ``adjust_proportion_for_clustering``
+correct pooled intervals for the fact that several tickers are scored on identical
+calendar dates. Quoting an iid interval over a correlated panel understates the
+uncertainty, sometimes by a factor of 1.6 on the interval width.
+
+*Walk-forward* -- ``run_walk_forward`` is the engine that produces every
+out-of-sample number in the project.
+
+Deliberately absent: a level-based directional-accuracy helper. A metric that
+takes ``np.sign(np.diff(y_true))`` silently returns the wrong answer when handed a
+return target, which is the only target this project models. Use
+``direction_metrics`` on return signs instead.
 """
+
+from __future__ import annotations
+
+import logging
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import logging
+from sklearn.metrics import r2_score
 
 logger = logging.getLogger(__name__)
 
 
-class ModelEvaluator:
-    """
-    Evaluates model performance using various metrics
-    """
-
-    def __init__(self, y_true: np.ndarray, y_pred: np.ndarray, prices: np.ndarray = None):
-        """
-        Initialize evaluator
-
-        Args:
-            y_true: True values
-            y_pred: Predicted values
-            prices: Original prices (for financial metrics)
-        """
-        self.y_true = np.array(y_true)
-        self.y_pred = np.array(y_pred)
-        self.prices = np.array(prices) if prices is not None else None
-
-        # Remove NaN values
-        mask = ~(np.isnan(self.y_true) | np.isnan(self.y_pred))
-        self.y_true = self.y_true[mask]
-        self.y_pred = self.y_pred[mask]
-
-        if self.prices is not None:
-            self.prices = self.prices[mask]
-
-    def mse(self) -> float:
-        """
-        Calculate Mean Squared Error
-
-        Returns:
-            MSE value
-        """
-        return mean_squared_error(self.y_true, self.y_pred)
-
-    def rmse(self) -> float:
-        """
-        Calculate Root Mean Squared Error
-
-        Returns:
-            RMSE value
-        """
-        return np.sqrt(self.mse())
-
-    def mae(self) -> float:
-        """
-        Calculate Mean Absolute Error
-
-        Returns:
-            MAE value
-        """
-        return mean_absolute_error(self.y_true, self.y_pred)
-
-    def mape(self) -> float:
-        """
-        Calculate Mean Absolute Percentage Error
-
-        Returns:
-            MAPE value (as percentage)
-        """
-        # Avoid division by zero
-        mask = self.y_true != 0
-        if not mask.any():
-            return np.inf
-
-        mape = np.mean(np.abs((self.y_true[mask] - self.y_pred[mask]) / self.y_true[mask])) * 100
-        return mape
-
-    def r2(self) -> float:
-        """
-        Calculate R-squared Score
-
-        Returns:
-            R² value
-        """
-        return r2_score(self.y_true, self.y_pred)
-
-    def directional_accuracy(self) -> float:
-        """
-        Calculate directional accuracy (% of correct direction predictions)
-
-        Returns:
-            Directional accuracy (0-1)
-        """
-        if len(self.y_true) < 2:
-            return 0.0
-
-        # Calculate actual and predicted directions
-        actual_direction = np.sign(np.diff(self.y_true))
-        predicted_direction = np.sign(np.diff(self.y_pred))
-
-        # Calculate accuracy
-        correct = np.sum(actual_direction == predicted_direction)
-        total = len(actual_direction)
-
-        return correct / total if total > 0 else 0.0
-
-    def max_error(self) -> float:
-        """
-        Calculate maximum absolute error
-
-        Returns:
-            Max error
-        """
-        return np.max(np.abs(self.y_true - self.y_pred))
-
-    def explained_variance(self) -> float:
-        """
-        Calculate explained variance score
-
-        Returns:
-            Explained variance
-        """
-        from sklearn.metrics import explained_variance_score
-        return explained_variance_score(self.y_true, self.y_pred)
-
-    def mean_directional_error(self) -> float:
-        """
-        Calculate mean directional error (bias)
-
-        Returns:
-            Mean directional error
-        """
-        return np.mean(self.y_pred - self.y_true)
-
-    def theil_u_statistic(self) -> float:
-        """
-        Calculate Theil's U statistic (forecast accuracy measure)
-
-        Returns:
-            Theil U value
-        """
-        numerator = np.sqrt(np.mean((self.y_pred - self.y_true) ** 2))
-        denominator = np.sqrt(np.mean(self.y_true ** 2)) + np.sqrt(np.mean(self.y_pred ** 2))
-
-        return numerator / denominator if denominator != 0 else np.inf
-
-    def calculate_returns_based_metrics(self) -> Dict[str, float]:
-        """
-        Calculate returns-based metrics (requires prices)
-
-        Returns:
-            Dictionary of financial metrics
-        """
-        if self.prices is None:
-            logger.warning("Prices not provided, cannot calculate returns-based metrics")
-            return {}
-
-        # Calculate returns
-        actual_returns = np.diff(self.y_true) / self.y_true[:-1]
-        predicted_returns = np.diff(self.y_pred) / self.y_pred[:-1]
-
-        metrics = {}
-
-        # Sharpe Ratio (annualized, assuming daily data)
-        if len(actual_returns) > 0:
-            sharpe_actual = self._calculate_sharpe_ratio(actual_returns)
-            sharpe_predicted = self._calculate_sharpe_ratio(predicted_returns)
-
-            metrics['sharpe_ratio_actual'] = sharpe_actual
-            metrics['sharpe_ratio_predicted'] = sharpe_predicted
-
-        # Maximum Drawdown
-        metrics['max_drawdown_actual'] = self._calculate_max_drawdown(self.y_true)
-        metrics['max_drawdown_predicted'] = self._calculate_max_drawdown(self.y_pred)
-
-        # Volatility (annualized)
-        metrics['volatility_actual'] = np.std(actual_returns) * np.sqrt(252)
-        metrics['volatility_predicted'] = np.std(predicted_returns) * np.sqrt(252)
-
-        return metrics
-
-    def _calculate_sharpe_ratio(self, returns: np.ndarray, risk_free_rate: float = 0.02) -> float:
-        """
-        Calculate Sharpe Ratio
-
-        Args:
-            returns: Array of returns
-            risk_free_rate: Annual risk-free rate
-
-        Returns:
-            Sharpe ratio
-        """
-        if len(returns) == 0:
-            return 0.0
-
-        # Annualize
-        mean_return = np.mean(returns) * 252
-        std_return = np.std(returns) * np.sqrt(252)
-
-        if std_return == 0:
-            return 0.0
-
-        sharpe = (mean_return - risk_free_rate) / std_return
-        return sharpe
-
-    def _calculate_max_drawdown(self, prices: np.ndarray) -> float:
-        """
-        Calculate maximum drawdown
-
-        Args:
-            prices: Array of prices
-
-        Returns:
-            Maximum drawdown (as percentage)
-        """
-        if len(prices) == 0:
-            return 0.0
-
-        # Calculate running maximum
-        running_max = np.maximum.accumulate(prices)
-
-        # Calculate drawdown
-        drawdown = (prices - running_max) / running_max
-
-        # Return maximum drawdown (as positive percentage)
-        return abs(np.min(drawdown)) * 100
-
-    def calculate_all_metrics(self) -> Dict[str, float]:
-        """
-        Calculate all available metrics
-
-        Returns:
-            Dictionary of all metrics
-        """
-        logger.info("Calculating all evaluation metrics")
-
-        metrics = {
-            'MSE': self.mse(),
-            'RMSE': self.rmse(),
-            'MAE': self.mae(),
-            'MAPE': self.mape(),
-            'R2': self.r2(),
-            'Directional_Accuracy': self.directional_accuracy(),
-            'Max_Error': self.max_error(),
-            'Explained_Variance': self.explained_variance(),
-            'Mean_Directional_Error': self.mean_directional_error(),
-            'Theil_U': self.theil_u_statistic()
-        }
-
-        # Add financial metrics if prices available
-        financial_metrics = self.calculate_returns_based_metrics()
-        metrics.update(financial_metrics)
-
-        return metrics
-
-    def print_metrics(self):
-        """
-        Print all metrics in a formatted way
-        """
-        metrics = self.calculate_all_metrics()
-
-        print("\n" + "=" * 60)
-        print("MODEL EVALUATION METRICS")
-        print("=" * 60)
-
-        # Statistical metrics
-        print("\n📊 Statistical Metrics:")
-        print(f"  MSE:                    {metrics['MSE']:.4f}")
-        print(f"  RMSE:                   {metrics['RMSE']:.4f}")
-        print(f"  MAE:                    {metrics['MAE']:.4f}")
-        print(f"  MAPE:                   {metrics['MAPE']:.2f}%")
-        print(f"  R²:                     {metrics['R2']:.4f}")
-        print(f"  Explained Variance:     {metrics['Explained_Variance']:.4f}")
-
-        # Prediction quality
-        print("\n🎯 Prediction Quality:")
-        print(f"  Directional Accuracy:   {metrics['Directional_Accuracy']*100:.2f}%")
-        print(f"  Max Error:              {metrics['Max_Error']:.4f}")
-        print(f"  Mean Directional Error: {metrics['Mean_Directional_Error']:.4f}")
-        print(f"  Theil U Statistic:      {metrics['Theil_U']:.4f}")
-
-        # Financial metrics
-        if 'sharpe_ratio_actual' in metrics:
-            print("\n💰 Financial Metrics:")
-            print(f"  Sharpe Ratio (Actual):     {metrics['sharpe_ratio_actual']:.4f}")
-            print(f"  Sharpe Ratio (Predicted):  {metrics['sharpe_ratio_predicted']:.4f}")
-            print(f"  Max Drawdown (Actual):     {metrics['max_drawdown_actual']:.2f}%")
-            print(f"  Max Drawdown (Predicted):  {metrics['max_drawdown_predicted']:.2f}%")
-            print(f"  Volatility (Actual):       {metrics['volatility_actual']:.2f}%")
-            print(f"  Volatility (Predicted):    {metrics['volatility_predicted']:.2f}%")
-
-        print("=" * 60 + "\n")
-
-
-def compare_models(
-    models_results: Dict[str, Tuple[np.ndarray, np.ndarray]],
-    prices: np.ndarray = None
-) -> pd.DataFrame:
-    """
-    Compare multiple models
-
-    Args:
-        models_results: Dictionary of {model_name: (y_true, y_pred)}
-        prices: Original prices (optional)
-
-    Returns:
-        DataFrame with comparison results
-    """
-    logger.info(f"Comparing {len(models_results)} models")
-
-    results = {}
-
-    for model_name, (y_true, y_pred) in models_results.items():
-        evaluator = ModelEvaluator(y_true, y_pred, prices)
-        metrics = evaluator.calculate_all_metrics()
-        results[model_name] = metrics
-
-    # Create DataFrame
-    df = pd.DataFrame(results).T
-
-    # Sort by R² score (descending)
-    df = df.sort_values('R2', ascending=False)
-
-    return df
-
-
-def residual_analysis(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, any]:
-    """
-    Perform residual analysis
-
-    Args:
-        y_true: True values
-        y_pred: Predicted values
-
-    Returns:
-        Dictionary with residual statistics
-    """
-    residuals = y_true - y_pred
-
-    analysis = {
-        'residuals': residuals,
-        'mean': np.mean(residuals),
-        'std': np.std(residuals),
-        'min': np.min(residuals),
-        'max': np.max(residuals),
-        'q25': np.percentile(residuals, 25),
-        'q50': np.percentile(residuals, 50),
-        'q75': np.percentile(residuals, 75),
-        'skewness': pd.Series(residuals).skew(),
-        'kurtosis': pd.Series(residuals).kurtosis()
-    }
-
-    # Test for normality (Shapiro-Wilk test)
-    from scipy import stats
-    if len(residuals) < 5000:  # Shapiro-Wilk limited to 5000 samples
-        _, p_value = stats.shapiro(residuals)
-        analysis['normality_p_value'] = p_value
-        analysis['is_normal'] = p_value > 0.05
-
-    # Autocorrelation of residuals
-    if len(residuals) > 1:
-        analysis['autocorrelation_lag1'] = np.corrcoef(residuals[:-1], residuals[1:])[0, 1]
-
-    return analysis
-
-
-def calculate_confidence_intervals(
-    y_pred: np.ndarray,
-    residuals: np.ndarray,
-    confidence: float = 0.95
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Calculate prediction confidence intervals
-
-    Args:
-        y_pred: Predicted values
-        residuals: Model residuals
-        confidence: Confidence level (default 0.95)
-
-    Returns:
-        Tuple of (lower_bound, upper_bound)
-    """
-    from scipy import stats
-
-    # Calculate standard error
-    std_error = np.std(residuals)
-
-    # Calculate z-score for confidence level
-    z_score = stats.norm.ppf((1 + confidence) / 2)
-
-    # Calculate intervals
-    margin = z_score * std_error
-    lower_bound = y_pred - margin
-    upper_bound = y_pred + margin
-
-    return lower_bound, upper_bound
-
-
-def wilson_interval(
-    successes: int,
-    n: int,
-    confidence: float = 0.95
-) -> Tuple[float, float]:
-    """
-    Wilson score interval for a binomial proportion.
-
-    Preferred over the normal approximation because it stays inside [0, 1] and
-    behaves sensibly for proportions near 0.5 with a few hundred observations --
-    exactly the regime a directional-accuracy claim lives in.
-
-    Args:
-        successes: Number of correct predictions
-        n: Number of predictions
-        confidence: Coverage (default 0.95)
-
-    Returns:
-        (lower, upper)
-    """
-    from scipy import stats
-
-    if n == 0:
-        return (float('nan'), float('nan'))
-
-    z = stats.norm.ppf((1 + confidence) / 2)
-    p = successes / n
-    denom = 1 + z ** 2 / n
-    centre = (p + z ** 2 / (2 * n)) / denom
-    margin = z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2)) / denom
-    return (max(0.0, centre - margin), min(1.0, centre + margin))
-
+# ----------------------------------------------------------------------
+# Return regression
+# ----------------------------------------------------------------------
 
 def return_regression_metrics(
     y_true: np.ndarray,
@@ -474,24 +81,115 @@ def return_regression_metrics(
     }
 
 
+# ----------------------------------------------------------------------
+# Proportions: intervals and paired tests
+# ----------------------------------------------------------------------
+
+def wilson_interval(
+    successes: float,
+    n: float,
+    confidence: float = 0.95
+) -> tuple:
+    """
+    Wilson score interval for a binomial proportion.
+
+    Preferred over the normal approximation because it stays inside [0, 1] and
+    behaves sensibly for proportions near 0.5 with a few hundred observations --
+    exactly the regime a directional-accuracy claim lives in.
+
+    Accepts non-integer ``successes``/``n`` so an effective sample size from
+    ``design_effect`` can be passed straight in.
+
+    Args:
+        successes: Number of correct predictions
+        n: Number of predictions
+        confidence: Coverage (default 0.95)
+
+    Returns:
+        (lower, upper)
+    """
+    from scipy import stats
+
+    if n <= 0:
+        return (float('nan'), float('nan'))
+
+    z = stats.norm.ppf((1 + confidence) / 2)
+    p = successes / n
+    denom = 1 + z ** 2 / n
+    centre = (p + z ** 2 / (2 * n)) / denom
+    margin = z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2)) / denom
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
+
+
+def mcnemar_test(
+    y_true: np.ndarray,
+    y_pred_a: np.ndarray,
+    y_pred_b: np.ndarray
+) -> Dict[str, float]:
+    """
+    Exact McNemar test comparing two predictors on the same rows.
+
+    The right test when two predictors are scored on an identical set of
+    observations. A one-sample binomial test against the rival's *rate* treats the
+    two as independent samples, which they are not -- they agree on most rows, and
+    ignoring that pairing mis-states the evidence in either direction depending on
+    how correlated the errors are.
+
+    Only discordant pairs carry information: b is where A is right and B is wrong,
+    c the reverse. Under the null the count b is Binomial(b + c, 0.5).
+
+    Args:
+        y_true: Realised labels
+        y_pred_a: First predictor's labels
+        y_pred_b: Second predictor's labels (the reference)
+
+    Returns:
+        Dict with the discordant counts, the p-value, and each predictor's hits
+    """
+    from scipy import stats
+
+    y_true = np.asarray(y_true, dtype=int)
+    correct_a = np.asarray(y_pred_a, dtype=int) == y_true
+    correct_b = np.asarray(y_pred_b, dtype=int) == y_true
+
+    b = int(np.sum(correct_a & ~correct_b))   # A right, B wrong
+    c = int(np.sum(~correct_a & correct_b))   # A wrong, B right
+
+    pvalue = 1.0 if (b + c) == 0 else float(stats.binomtest(b, b + c, 0.5).pvalue)
+
+    return {
+        'mcnemar_b': b,
+        'mcnemar_c': c,
+        'mcnemar_n_discordant': b + c,
+        'p_vs_reference': pvalue,
+    }
+
+
 def direction_metrics(
     y_true_direction: np.ndarray,
     y_pred_direction: np.ndarray,
     reference_rate: float = None,
+    reference_prediction: np.ndarray = None,
     confidence: float = 0.95
 ) -> Dict[str, float]:
     """
     Directional accuracy with an interval and significance tests.
 
-    A bare accuracy number is not interpretable: with ~800 test days, the 95%
-    interval on a coin flip is roughly +/-3.5 points, so 53% is not distinguishable
-    from chance. Two null hypotheses are tested -- 0.5, and the training-window
-    up-frequency, which is the rate an always-up baseline achieves for free.
+    A bare accuracy number is not interpretable: with ~1,500 test days the 95%
+    interval on a coin flip is roughly +/-2.5 points, so 53% is not distinguishable
+    from chance. Two nulls are tested -- 0.5, and the reference predictor, which is
+    the always-up baseline the market's upward drift hands over for free.
+
+    The comparison against the reference is paired (McNemar) when
+    ``reference_prediction`` is supplied, because both predictors are scored on the
+    same rows.
 
     Args:
         y_true_direction: Realised direction, 1 for up, 0 otherwise
         y_pred_direction: Predicted direction, 1 for up, 0 otherwise
-        reference_rate: Training-window up-frequency for the second test
+        reference_rate: The reference predictor's accuracy, for reporting
+        reference_prediction: The reference predictor's labels on the same rows,
+            enabling McNemar's test
         confidence: Interval coverage
 
     Returns:
@@ -527,14 +225,111 @@ def direction_metrics(
         'actual_up_rate': float(true_up.mean()),
     }
 
-    if reference_rate is not None and 0 < reference_rate < 1:
+    if reference_rate is not None:
         metrics['reference_rate'] = float(reference_rate)
-        metrics['p_vs_reference'] = float(
-            stats.binomtest(correct, n, reference_rate).pvalue
-        )
+
+    if reference_prediction is not None:
+        metrics.update(mcnemar_test(y_true, y_pred, reference_prediction))
 
     return metrics
 
+
+# ----------------------------------------------------------------------
+# Panel dependence
+# ----------------------------------------------------------------------
+
+def design_effect(panel: pd.DataFrame) -> Dict[str, float]:
+    """
+    Design effect for a mean taken over a panel clustered by date.
+
+    Pooling several tickers scored on identical calendar dates does not multiply
+    the information by the number of tickers. Market-wide moves make the tickers'
+    outcomes correlate on any given day -- and when the basket contains an index
+    alongside its own constituents, the overlap is mechanical, not incidental.
+
+    With m series and mean pairwise correlation rho, the variance of the pooled
+    mean is inflated by ``deff = 1 + (m - 1) * rho``, so the effective sample size
+    is ``n_total / deff``. Intervals computed from n_total rather than n_effective
+    are too narrow by ``sqrt(deff)``.
+
+    Args:
+        panel: DataFrame indexed by date, one column per ticker, holding the
+            quantity being averaged (e.g. a 0/1 correctness indicator)
+
+    Returns:
+        Dict with m, rho, deff, n_total and n_effective
+    """
+    aligned = panel.dropna(how='any')
+    m = aligned.shape[1]
+    n_total = int(aligned.size)
+
+    if m < 2 or len(aligned) < 2:
+        return {
+            'n_series': m, 'mean_pairwise_corr': 0.0, 'design_effect': 1.0,
+            'n_total': n_total, 'n_effective': float(n_total),
+        }
+
+    correlation = aligned.corr().to_numpy()
+    off_diagonal = correlation[~np.eye(m, dtype=bool)]
+    rho = float(np.nanmean(off_diagonal))
+
+    deff = max(1.0, 1 + (m - 1) * rho)
+
+    return {
+        'n_series': m,
+        'mean_pairwise_corr': rho,
+        'design_effect': deff,
+        'n_total': n_total,
+        'n_effective': float(n_total / deff),
+    }
+
+
+def adjust_proportion_for_clustering(
+    accuracy: float,
+    n_effective: float,
+    reference_rate: float = None,
+    confidence: float = 0.95
+) -> Dict[str, float]:
+    """
+    Recompute a proportion's interval and p-value at an effective sample size.
+
+    The point estimate is unchanged -- clustering does not bias the mean, it only
+    inflates its variance. Only the interval and the p-values move.
+
+    Args:
+        accuracy: The observed proportion
+        n_effective: Effective sample size from ``design_effect``
+        reference_rate: Optional second null hypothesis
+        confidence: Interval coverage
+
+    Returns:
+        Dict of design-effect-adjusted interval and p-values
+    """
+    from scipy import stats
+
+    n_round = int(round(n_effective))
+    successes = int(round(accuracy * n_round))
+    lower, upper = wilson_interval(accuracy * n_effective, n_effective, confidence)
+
+    adjusted = {
+        'n_effective': float(n_effective),
+        'adj_ci_lower': lower,
+        'adj_ci_upper': upper,
+        'adj_p_vs_0.5': float(stats.binomtest(successes, n_round, 0.5).pvalue)
+        if n_round > 0 else np.nan,
+    }
+
+    if reference_rate is not None and 0 < reference_rate < 1:
+        adjusted['adj_p_vs_reference_rate'] = float(
+            stats.binomtest(successes, n_round, reference_rate).pvalue
+        ) if n_round > 0 else np.nan
+
+    return adjusted
+
+
+# ----------------------------------------------------------------------
+# Walk-forward engine
+# ----------------------------------------------------------------------
 
 def run_walk_forward(
     dataset: pd.DataFrame,

@@ -3,16 +3,16 @@
 Predicts the **next-day log return** (and its sign) for a basket of liquid US
 equities — SPY, AAPL, MSFT, NVDA, JPM — using daily OHLCV from 2015-01-01 to
 2024-12-31 and 96 engineered technical features (48 after dropping price levels;
-see §3). Validation is walk-forward
-only, with an embargo; every transform is fitted inside the training window; every
-model is scored against baselines that cost nothing to compute.
+see §3). Validation is walk-forward only, with an embargo; every transform is
+fitted inside the training window; every model is scored against baselines that
+cost nothing to compute.
 
 **The headline finding is that next-day returns are close to unpredictable, and the
 project's value is that it establishes this rigorously rather than hiding it.**
 Pooled over 7,875 out-of-sample days, the best model's return R² is **-0.003** —
-worse than forecasting zero. Directional accuracy tops out at **53.4% [52.2, 54.5]**,
-which beats a coin flip but *not* the always-up baseline (53.8%), because equities
-drift upward. Net of 15 bps per side, **1 of 15** ticker×model backtests beat
+worse than forecasting zero. Directional accuracy tops out at **53.3%**, which
+beats a coin flip but *not* the always-up baseline (53.8%), because equities drift
+upward. Net of 15 bps per side, **1 of 15** ticker×model backtests beat
 buy-and-hold, and that one is not statistically significant.
 
 Every number below comes from a committed file under [`results/`](../results).
@@ -28,96 +28,117 @@ Full per-ticker breakdown: [`results/return_regression.md`](../results/return_re
 
 | Model | RMSE | R² | R² vs zero-forecast |
 |---|---|---|---|
-| Random Forest | 0.0217 | **-0.0034** | -0.0014 |
-| XGBoost | 0.0222 | -0.0451 | -0.0430 |
-| Ridge | 0.0222 | -0.0471 | -0.0450 |
-| *Baseline: train-window mean* | 0.0217 | -0.0007 | +0.0013 |
-| *Baseline: zero return* | 0.0217 | -0.0020 | 0.0000 |
-| *Baseline: yesterday's return* | 0.0322 | -1.2065 | -1.2021 |
+| Random Forest | 0.0218 | **-0.0034** | -0.0013 |
+| XGBoost | 0.0222 | -0.0455 | -0.0433 |
+| Ridge | 0.0222 | -0.0467 | -0.0445 |
+| *Baseline: train-window mean* | 0.0218 | -0.0007 | +0.0013 |
+| *Baseline: zero return* | 0.0218 | -0.0021 | 0.0000 |
+| *Baseline: yesterday's return* | 0.0323 | -1.2009 | -1.1963 |
 
 Every model lands at or below zero. The best of them (Random Forest, R² = -0.0034)
 is beaten by the two-line baseline that always predicts the training window's mean
 return. The persistence baseline — "tomorrow's return will look like today's" — is
-catastrophically bad (R² = -1.21), which is the direct measurement that daily
+catastrophically bad (R² = -1.20), which is the direct measurement that daily
 returns carry essentially no first-order autocorrelation.
 
-Per-ticker R² ranges from -0.064 (NVDA, Ridge) to +0.007 (AAPL, Random Forest).
-That single positive value is the largest return R² anywhere in the study.
+Across tickers, **model** R² ranges from -0.063 (NVDA, Ridge) to +0.007 (AAPL,
+Random Forest); that single positive value is the largest model R² anywhere in the
+study. The persistence baseline runs far lower still, reaching -1.35 (MSFT).
 
 ### 1.2 Direction — pooled
 
 Full table incl. per-ticker: [`results/direction.md`](../results/direction.md).
-`p vs 0.5` is a binomial test against a coin flip; `p vs base` is against the
-training-window up-frequency, i.e. what the always-up baseline gets for free.
+`p vs 0.5` is a binomial test against a coin flip. `p vs base` is **McNemar's exact
+test** against the always-up baseline — paired, because both predictors are scored
+on the same rows; an unpaired test against the baseline's *rate* would ignore that
+they agree on most days.
 
-| Model | n | Accuracy | 95% CI (Wilson) | p vs 0.5 | p vs base | Precision (up) | Recall (up) |
+The five tickers are scored on identical calendar dates, and SPY mechanically
+contains the other four, so the pooled panel carries less information than n =
+7,875 suggests. The realised up/down indicator has a mean cross-ticker correlation
+of **0.405**, giving a design effect of 1 + (m−1)ρ = **2.62** and an effective n of
+**3,004**; the realised log returns correlate even more strongly (ρ = 0.624, deff =
+3.50). Each model's interval below is widened by the design effect of *its own*
+correctness indicator, which is the quantity being averaged — computed in
+[`results/pooled_dependence.md`](../results/pooled_dependence.md).
+
+| Model | Accuracy | iid 95% CI | deff | eff. n | **adjusted 95% CI** | adj. p vs 0.5 | McNemar p vs base |
 |---|---|---|---|---|---|---|---|
-| Random Forest | 7875 | 53.35% | [52.24, 54.45] | 3.0e-09 | 0.477 | 54.68% | 77.23% |
-| Ridge / Logistic | 7875 | 52.01% | [50.91, 53.11] | 0.0004 | 0.0020 | 54.52% | 64.81% |
-| XGBoost | 7875 | 51.71% | [50.60, 52.81] | 0.0025 | 0.0003 | 54.35% | 63.56% |
-| *Baseline: always up* | 7875 | **53.77%** | [52.66, 54.86] | 2.5e-11 | 0.982 | 53.77% | 100% |
+| Random Forest | 53.32% | [52.22, 54.42] | 1.47 | 5,342 | **[51.98, 54.66]** | 1.2e-06 | 0.448 |
+| Ridge / Logistic | 52.08% | [50.97, 53.18] | 1.30 | 6,067 | **[50.82, 53.33]** | 0.0013 | 0.0140 |
+| XGBoost | 51.67% | [50.57, 52.77] | 1.25 | 6,281 | **[50.43, 52.90]** | 0.0087 | 0.0026 |
+| *Baseline: always up* | **53.75%** | [52.65, 54.85] | 2.62 | 3,004 | **[51.97, 55.53]** | 4.0e-05 | — |
+
+Note the design effects differ by design. The always-up baseline's correctness
+indicator *is* the market's up/down indicator, so it absorbs the full 2.62 and its
+interval widens most. The models' errors decorrelate across tickers (ρ = 0.06–0.12),
+so they retain more effective sample — but their accuracy is lower, and that is what
+decides the question.
 
 This table is the reason the direction task needs two null hypotheses. Against a
-coin flip, all three models are "significant" (p < 0.01) — a result that would look
-publishable. Against the always-up baseline, **none of them wins**: Random Forest
-ties it (p = 0.48, and its point estimate is *lower*), while Ridge and XGBoost are
-significantly **worse** (p = 0.002 and p = 0.0003). The models are rediscovering
-market drift, not direction.
+coin flip, all three models remain significant even after the clustering
+adjustment. Against the always-up baseline, **none of them wins**: Random Forest
+ties it (McNemar p = 0.45, and its point estimate is *lower* — 929 days where it
+wins against 963 where the baseline does), while Ridge and XGBoost are significantly
+**worse** (p = 0.014 and p = 0.0026). The models are rediscovering market drift, not
+direction.
 
-Best single cell in the whole study: AAPL / Random Forest at 55.11% [52.65, 57.55],
-p = 0.13 against that ticker's baseline. One promising cell out of 15 tested
-combinations, at p = 0.13, is what noise looks like.
+Best single cell in the study: AAPL / Random Forest at 54.98% [52.52, 57.43],
+McNemar p = 0.26 against that ticker's baseline. One promising cell out of 15 tested
+combinations, at p = 0.26, is what noise looks like.
 
 ### 1.3 Backtest vs buy-and-hold
 
 Long/flat, one position per day, sized at full capital, net of 10 bps commission +
 5 bps slippage **per side**, charged on entry, on every position change, and on the
 final liquidation. Mean across the five tickers; per-ticker rows in
-[`results/backtest.md`](../results/backtest.md).
+[`results/backtest.md`](../results/backtest.md). `Sharpe` is (CAGR − rf) / annualised
+volatility with rf = 0; the textbook arithmetic Sharpe is shown beside it (see §3).
 
-| Strategy | Total return | Annualised | Sharpe | Max drawdown | Turnover | Time in market |
-|---|---|---|---|---|---|---|
-| **Buy & Hold** | **612.2%** | **29.01%** | **0.824** | 43.9% | 2 | 100% |
-| Random Forest | 536.2% | 23.27% | 0.723 | 39.9% | 322 | 78.0% |
-| XGBoost | 177.2% | 14.71% | 0.522 | 46.7% | 452 | 70.2% |
-| Ridge | 118.3% | 9.36% | 0.310 | 37.9% | 576 | 55.2% |
-| *Baseline: train-window mean* | 612.2% | 29.01% | 0.824 | 43.9% | 2 | 100% |
-| *Baseline: yesterday's return* | -52.8% | -12.19% | -0.661 | 67.4% | 788 | 53.8% |
+| Strategy | Total return | Annualised | Sharpe | Sharpe (arith.) | Max drawdown | Turnover | Time in market |
+|---|---|---|---|---|---|---|---|
+| **Buy & Hold** | **634.3%** | **29.68%** | **0.843** | **0.894** | 43.9% | 2 | 100% |
+| Random Forest | 556.4% | 24.02% | 0.750 | 0.776 | 39.4% | 321 | 78.0% |
+| XGBoost | 179.7% | 15.09% | 0.538 | 0.617 | 47.1% | 451 | 70.2% |
+| Ridge | 121.6% | 9.68% | 0.322 | 0.413 | 38.1% | 577 | 55.1% |
+| *Baseline: train-window mean* | 634.3% | 29.68% | 0.843 | 0.894 | 43.9% | 2 | 100% |
+| *Baseline: yesterday's return* | -51.0% | -11.73% | -0.636 | -0.576 | 67.4% | 790 | 53.8% |
 
-No model beats buy-and-hold on average, on return or on Sharpe. Two details worth
-reading carefully:
+No model beats buy-and-hold on average, on return or on either Sharpe. Two details
+worth reading carefully:
 
 - The **train-window-mean baseline reproduces buy-and-hold exactly**. Its forecast
   is a positive constant, so it is always long. Any strategy whose "edge" is being
   long most of the time has found drift, not signal.
-- Random Forest achieves a **lower max drawdown** (39.9% vs 43.9%) while holding
+- Random Forest achieves a **lower max drawdown** (39.4% vs 43.9%) while holding
   the asset 78% of the time. That is the honest version of what these models do:
   mild de-risking, not forecasting.
 
-Exactly one of fifteen ticker×model runs beat buy-and-hold at the headline cost
-level — AAPL / Random Forest, +255.6pp, Sharpe 1.60 vs 0.87. Its *return* R² is
-+0.007, i.e. essentially zero, so the outperformance comes from timing luck, not
+Mean excess versus buy-and-hold at the headline cost: Random Forest **-78.0pp**,
+XGBoost -454.7pp, Ridge -512.7pp. Exactly one of fifteen ticker×model runs beat
+buy-and-hold — AAPL / Random Forest, +263.8pp, Sharpe 1.61 vs 0.87. Its *return* R²
+is +0.007, i.e. essentially zero, so the outperformance comes from timing luck, not
 forecast accuracy.
 
 ### 1.4 Cost sensitivity
 
-Mean across tickers, per-side cost swept from 0 to 20 bps.
+Mean excess return versus buy-and-hold, per-side cost swept from 0 to 20 bps.
 Full grid: [`results/cost_sensitivity.md`](../results/cost_sensitivity.md); the
 15 bps row is the headline configuration and comes from
 [`results/backtest.md`](../results/backtest.md).
 
-| Per-side cost | Excess vs buy-and-hold: RF | Ridge | XGBoost | Runs beating buy-and-hold |
+| Per-side cost | Random Forest | Ridge | XGBoost | Runs beating buy-and-hold |
 |---|---|---|---|---|
-| 0 bps | **+279.9pp** | -195.1pp | -156.0pp | 7 of 15 |
-| 5 bps | +143.1pp | -324.6pp | -271.5pp | 4 of 15 |
-| 10 bps | +25.3pp | -421.4pp | -362.8pp | 4 of 15 |
-| 15 bps (headline) | -76.0pp | -493.8pp | -435.0pp | 1 of 15 |
-| 20 bps | -163.1pp | -547.9pp | -492.0pp | 1 of 15 |
+| 0 bps | **+289.7pp** | -208.9pp | -175.1pp | 8 of 15 |
+| 5 bps | +148.3pp | -340.6pp | -290.7pp | 4 of 15 |
+| 10 bps | +26.6pp | -439.1pp | -382.3pp | 4 of 15 |
+| 15 bps (headline) | -78.0pp | -512.7pp | -454.7pp | 1 of 15 |
+| 20 bps | -167.9pp | -567.6pp | -511.9pp | 1 of 15 |
 
 This is the single most informative table here. At zero cost, Random Forest looks
-like a real strategy (+280pp over buy-and-hold, 7 of 15 runs winning). The entire
+like a real strategy (+290pp over buy-and-hold, 8 of 15 runs winning). The entire
 apparent edge is consumed between 0 and 15 bps — a realistic retail cost — because
-the strategy turns over ~322 times where buy-and-hold turns over twice. A backtest
+the strategy turns over ~321 times where buy-and-hold turns over twice. A backtest
 quoted without a cost sweep is not a result.
 
 ---
@@ -131,10 +152,10 @@ The same models, the same folds, scored two ways. Full table:
 | Ticker | Persistence: ŷ(t+1) = C(t) | Ridge on levels | Ridge, same model in return space |
 |---|---|---|---|
 | SPY | 0.9978 | 0.9971 | -0.0544 |
-| AAPL | 0.9981 | 0.9978 | -0.0172 |
-| MSFT | 0.9981 | 0.9978 | -0.0404 |
-| NVDA | 0.9981 | 0.9979 | -0.0636 |
-| JPM | 0.9964 | 0.9959 | -0.0356 |
+| AAPL | 0.9981 | 0.9978 | -0.0173 |
+| MSFT | 0.9981 | 0.9978 | -0.0402 |
+| NVDA | 0.9981 | 0.9979 | -0.0634 |
+| JPM | 0.9961 | 0.9956 | -0.0344 |
 
 Predicting the next day's price *level* scores R² ≈ 0.998 on every ticker — but so
 does the persistence forecast "tomorrow's close equals today's close", which
@@ -145,12 +166,12 @@ of tomorrow's variance before anyone fits anything. Move the identical models to
 the quantity a trader actually needs — the return — and the same fits score
 approximately zero.
 
-One extra finding worth keeping: Random Forest scores only 0.32–0.64 on levels,
-far *worse* than the linear model. Trees cannot extrapolate beyond their training
-range, so when NVDA's price leaves the training window the forest's predictions
-saturate. A model can score 0.998 or 0.32 on the same task purely from how it
-handles a trend — more evidence that the level score describes the target's
-statistics, not the model's skill.
+One extra finding worth keeping: Random Forest scores only 0.32–0.64 on levels, far
+*worse* than the linear model. Trees cannot extrapolate beyond their training range,
+so when NVDA's price leaves the training window the forest's predictions saturate. A
+model can score 0.998 or 0.32 on the same task purely from how it handles a trend —
+more evidence that the level score describes the target's statistics, not the
+model's skill.
 
 ---
 
@@ -162,13 +183,14 @@ non-stationary and trivially autocorrelated, so a level target hands a model a
 statement about predictability.
 
 **Walk-forward only, with an embargo.** 25 expanding-window folds per ticker: a
-504-day (~2y) initial training window, 63-day (~1 quarter) test folds, advancing
-one quarter at a time. Between each training window and its test fold sits a
-**199-row embargo**, computed as the feature warm-up length — the deepest rolling
-lookback in the feature set. Without it, a test-fold feature row computed from a
-200-day window would straddle the boundary and be partly built from training rows.
-Nothing is ever shuffled. Fold boundaries with dates:
-[`results/walk_forward_folds.md`](../results/walk_forward_folds.md).
+504-day (~2y) initial training window, 63-day (~1 quarter) test folds, advancing one
+quarter at a time. Between each training window and its test fold sits a **200-row
+embargo**, computed as the feature warm-up length (199 — the deepest rolling lookback
+in the feature set) **plus the one-day forecast horizon**. The lookback term stops a
+test-fold feature row from being built out of training rows; the horizon term
+accounts for the last training row's target reaching one bar forward, so the raw
+bars behind train and test are strictly disjoint. Nothing is ever shuffled. Fold
+boundaries with dates: [`results/walk_forward_folds.md`](../results/walk_forward_folds.md).
 
 **Everything fitted in-window.** Imputation, winsorisation, scaling and feature
 selection (`SelectKBest`, top 40) all live inside an sklearn `Pipeline` that is
@@ -176,12 +198,19 @@ constructed fresh and refitted for every fold. Selecting features on the full
 dataset before splitting — the original implementation — leaks the test period into
 which columns survive. Outlier handling is a train-window quantile clip inside the
 pipeline, never a full-sample statistic, and prices are never rebuilt from clipped
-returns.
+returns. The reported feature importances and feature/target correlations are also
+fitted on a single training window, and each table names the window it used.
 
 **Baselines first.** Zero-return, train-window-mean and persistence for regression;
 always-up for direction; buy-and-hold for the backtest. These are rows in every
 results table, not an afterthought. Two of the study's three most important
 conclusions (§1.1, §1.2) are visible only because the baselines are there.
+
+**Paired tests and clustered intervals.** Comparing a model with a baseline on the
+same rows uses McNemar's exact test, not a one-sample binomial against the
+baseline's rate. Pooled intervals are widened by the panel's design effect, because
+five tickers scored on the same dates — one of which contains the other four — do
+not supply five times the information (§1.2).
 
 **Scale-free features only.** The model matrix keeps the 48 features that are
 invariant to price level — returns, `dist_from_sma_*`, RSI, `bb_percent`, ATR/price,
@@ -194,6 +223,11 @@ charged on entry, on every position change and on the final liquidation. The
 strategy and the benchmark run through the same code path and are scored over the
 same bars, so neither gets a free bar. Reported with a cost sweep (§1.4) and
 turnover, because a strategy that only wins at zero cost has not found anything.
+**Sharpe definition:** the `Sharpe` column is (CAGR − rf) / annualised volatility
+with rf = 0 — geometric numerator, arithmetic denominator, i.e. realised growth per
+unit of volatility. The textbook arithmetic form, mean excess period return / period
+σ × √252, is reported alongside as `sharpe_arithmetic`; it is the higher of the two
+for a volatile path because compounding penalises variance. §1.3 quotes both.
 
 **Fixed hyperparameters, no tuning on test.** Three families — Ridge/Logistic,
 Random Forest, XGBoost — with documented defaults in `src/models.py`
@@ -231,7 +265,7 @@ python predict.py --model models/NVDA_linear.joblib --recent 3
 python train.py --basket --download
 
 # Tests
-python -m pytest -q          # 93 passed
+python -m pytest -q          # 102 passed
 ```
 
 `train.py` writes every table as both `.csv` and `.md`, plus three figures
@@ -251,7 +285,8 @@ drift apart — a mismatch raises rather than silently producing a wrong number.
 │   ├── feature_engineering.py  # indicators, targets, warm-up measurement
 │   ├── feature_selection.py    # correlation reporting (in-window only)
 │   ├── models.py               # 3 families, baselines, fit-in-window pipeline
-│   ├── evaluation.py           # return/direction metrics, walk-forward engine
+│   ├── evaluation.py           # return/direction metrics, McNemar, design
+│   │                           #   effect, walk-forward engine
 │   ├── backtesting.py          # cost-aware long/flat backtest + benchmark
 │   └── utils.py                # config, folds with embargo, artifact I/O
 ├── config/config.yaml
@@ -259,7 +294,7 @@ drift apart — a mismatch raises rather than silently producing a wrong number.
 ├── results/                    # committed tables + figures
 │   └── nvda_2018_2024/         # single-ticker default run
 ├── legacy/                     # superseded notebook + PDF
-├── tests/                      # 93 tests
+├── tests/                      # 102 tests
 ├── train.py                    # walk-forward pipeline
 └── predict.py                  # inference CLI
 ```
@@ -272,6 +307,17 @@ Stated plainly, because they bound every number above.
 
 - **Daily frequency only.** Any genuine short-horizon signal is likely intraday;
   this study cannot see it.
+- **Survivorship and selection in the basket.** The five tickers were chosen in
+  2024 from names that are liquid *today*, and three of them — AAPL, MSFT and
+  especially NVDA — are among the biggest equity winners of the decade. SPY then
+  overlaps the other four outright. This is not a neutral sample: it is why
+  buy-and-hold compounds to ~634% and why that is such a punishing bar for any
+  strategy to clear. A basket including the decade's losers and delisted names
+  would lower the benchmark and could easily flatter the models by comparison.
+- **Pooled statistics are not iid.** Because the tickers share calendar dates and
+  SPY contains the rest, pooled intervals are widened by a measured design effect
+  (§1.2). Even so, the effective n is an approximation from a mean pairwise
+  correlation, not a full panel model with time-varying dependence.
 - **Five tickers, one regime-blind model.** Large-cap US equities over a decade
   that includes a historic bull run. No regime detection, so a single model is
   asked to describe 2018, the 2020 crash and 2023–24 alike.
@@ -284,7 +330,5 @@ Stated plainly, because they bound every number above.
 - **Costs are modelled, not measured.** 10 bps + 5 bps per side is a reasonable
   retail assumption, not a fill-level simulation. No market impact, no borrow
   costs, no slippage that scales with size.
-- **Survivorship.** The basket was chosen in 2024 from tickers that are liquid
-  today.
 - **Not investment advice.** This is a methodology demonstration. Historical
   results, including these, do not predict future returns.

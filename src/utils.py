@@ -61,18 +61,6 @@ def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logg
     return logger
 
 
-def create_directories(config: Dict[str, Any]) -> None:
-    """
-    Create necessary directories for the project
-
-    Args:
-        config: Configuration dictionary
-    """
-    paths = config.get('paths', {})
-    for key, path in paths.items():
-        os.makedirs(path, exist_ok=True)
-
-
 def time_series_split(
     data: pd.DataFrame,
     test_size: float = 0.2,

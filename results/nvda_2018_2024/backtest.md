@@ -1,9 +1,9 @@
-| ticker | model | is_baseline | total_return_pct | annualized_return_pct | sharpe | max_drawdown_pct | turnover | time_in_market | n_periods | excess_vs_buy_hold_pct |
-|---|---|---|---|---|---|---|---|---|---|---|
-| NVDA | Buy & Hold | yes | 585.8623 | 80.8438 | 1.4647 | 66.3351 | 2.0000 | 1.0000 | 819 |  |
-| NVDA | Ridge / Logistic |  | 86.4626 | 21.1320 | 0.5246 | 55.1312 | 328.0000 | 0.6300 | 819 | -499.3997 |
-| NVDA | Random Forest |  | 310.5981 | 54.4343 | 1.2158 | 58.3673 | 284.0000 | 0.6716 | 819 | -275.2642 |
-| NVDA | XGBoost |  | 130.4673 | 29.2921 | 0.7279 | 48.3303 | 264.0000 | 0.5800 | 819 | -455.3950 |
-| NVDA | Baseline: zero return | yes | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 819 | -585.8623 |
-| NVDA | Baseline: train-window mean | yes | 585.8623 | 80.8438 | 1.4647 | 66.3351 | 2.0000 | 1.0000 | 819 | 0.0000 |
-| NVDA | Baseline: yesterday's return | yes | 95.7517 | 22.9577 | 0.6111 | 46.7410 | 382.0000 | 0.5360 | 819 | -490.1106 |
+| ticker | model | is_baseline | total_return_pct | annualized_return_pct | sharpe | sharpe_arithmetic | max_drawdown_pct | turnover | time_in_market | n_periods | excess_vs_buy_hold_pct |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| NVDA | Buy & Hold | yes | 589.3478 | 81.1261 | 1.4697 | 1.3493 | 66.3351 | 2.0000 | 1.0000 | 819 |  |
+| NVDA | Ridge / Logistic |  | 76.1065 | 19.0209 | 0.4722 | 0.6319 | 56.6188 | 326.0000 | 0.6300 | 819 | -513.2413 |
+| NVDA | Random Forest |  | 293.3151 | 52.4043 | 1.1710 | 1.1609 | 59.7475 | 280.0000 | 0.6716 | 819 | -296.0327 |
+| NVDA | XGBoost |  | 137.0061 | 30.4099 | 0.7552 | 0.8555 | 48.3303 | 264.0000 | 0.5812 | 819 | -452.3417 |
+| NVDA | Baseline: zero return | yes | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 819 | -589.3478 |
+| NVDA | Baseline: train-window mean | yes | 589.3478 | 81.1261 | 1.4697 | 1.3493 | 66.3351 | 2.0000 | 1.0000 | 819 | 0.0000 |
+| NVDA | Baseline: yesterday's return | yes | 96.7465 | 23.1496 | 0.6161 | 0.7417 | 46.7410 | 382.0000 | 0.5360 | 819 | -492.6013 |

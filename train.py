@@ -36,6 +36,8 @@ import pandas as pd
 from src.backtesting import Backtester
 from src.data_loader import load_stock_data
 from src.evaluation import (
+    adjust_proportion_for_clustering,
+    design_effect,
     direction_metrics,
     return_regression_metrics,
     run_walk_forward,
@@ -113,11 +115,13 @@ def evaluate_ticker(symbol: str, config: Dict, start_date: str = None) -> Dict:
     )
     level_features = feature_columns(dataset, stationary_only=False)
 
-    # Embargo = deepest feature lookback, so no test feature row is computed
-    # from a row that also fed the training window.
+    # Embargo = deepest feature lookback + the forecast horizon. The lookback term
+    # keeps any test feature row from being computed out of a training row; the
+    # horizon term accounts for the last training row's target reaching forward
+    # h bars, so the raw bars behind train and test are strictly disjoint.
     embargo = train_cfg.get("embargo", "auto")
     if embargo == "auto":
-        embargo = feature_warmup_length(raw, config["features"])
+        embargo = feature_warmup_length(raw, config["features"]) + horizon
 
     folds = walk_forward_folds(
         n_samples=len(dataset),
@@ -220,23 +224,42 @@ def score_returns(result: Dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def score_direction(result: Dict) -> pd.DataFrame:
-    """Directional metrics for every classifier and the always-up baseline."""
+def score_direction(result: Dict, confidence: float = 0.95) -> pd.DataFrame:
+    """
+    Directional metrics for every classifier and the always-up baseline.
+
+    The reference comparison is paired: the always-up baseline's labels on the
+    same rows are handed to direction_metrics so it can run McNemar's test rather
+    than an unpaired binomial against the baseline's rate.
+    """
     rows = []
     labels = {**{f: MODEL_LABELS[f] for f in MODEL_LABELS}, **DIRECTION_BASELINE}
+
+    baseline_frame = result["predictions"]["clf::always_up"]
+    baseline_truth = baseline_frame["y_true"].to_numpy()
+    baseline_accuracy = float(
+        (baseline_frame["y_pred"].to_numpy() == baseline_truth).mean()
+    )
 
     for key, frame in result["predictions"].items():
         kind, name = key.split("::")
         if kind != "clf":
             continue
-        reference = float(frame["train_up_rate"].mean())
+
+        is_baseline = name in DIRECTION_BASELINE
         metrics = direction_metrics(
-            frame["y_true"].to_numpy(), frame["y_pred"].to_numpy(), reference
+            frame["y_true"].to_numpy(),
+            frame["y_pred"].to_numpy(),
+            reference_rate=baseline_accuracy,
+            # Comparing the baseline with itself carries no information.
+            reference_prediction=None if is_baseline
+            else baseline_frame["y_pred"].to_numpy(),
+            confidence=confidence,
         )
         rows.append({
             "ticker": result["symbol"],
             "model": labels.get(name, name),
-            "is_baseline": name in DIRECTION_BASELINE,
+            "is_baseline": is_baseline,
             **metrics,
         })
     return pd.DataFrame(rows)
@@ -289,7 +312,10 @@ def _backtest_row(run: Dict) -> Dict:
     return {
         "total_return_pct": metrics["total_return"],
         "annualized_return_pct": metrics["annualized_return"],
+        # sharpe = (CAGR - rf) / annualised vol; sharpe_arithmetic is the textbook
+        # mean-excess-return form. Both reported; docs quote `sharpe`.
         "sharpe": metrics["sharpe_ratio"],
+        "sharpe_arithmetic": metrics["sharpe_arithmetic"],
         "max_drawdown_pct": metrics["max_drawdown"],
         "turnover": metrics.get("turnover", np.nan),
         "time_in_market": metrics.get("time_in_market", np.nan),
@@ -339,8 +365,74 @@ def pool_predictions(results: List[Dict], prefix: str) -> Dict[str, pd.DataFrame
     return {k: pd.concat(v) for k, v in pooled.items()}
 
 
-def score_pooled(results: List[Dict], config: Dict) -> Dict[str, pd.DataFrame]:
-    """Score every model on all tickers' out-of-sample rows pooled together."""
+def correctness_panel(results: List[Dict], model_key: str) -> pd.DataFrame:
+    """
+    Build a date x ticker panel of 0/1 correctness for one direction model.
+
+    Each column is one ticker's out-of-sample hit/miss series. Because every
+    ticker is scored on the same calendar dates, the columns align and their
+    correlation is what inflates the pooled interval.
+    """
+    columns = {}
+    for result in results:
+        frame = result["predictions"][model_key]
+        columns[result["symbol"]] = pd.Series(
+            (frame["y_pred"].to_numpy() == frame["y_true"].to_numpy()).astype(float),
+            index=frame.index,
+        )
+    return pd.DataFrame(columns)
+
+
+def score_pooled_dependence(results: List[Dict]) -> pd.DataFrame:
+    """
+    Quantify how much less information the pooled panel carries than n suggests.
+
+    Reports the design effect for each direction model's correctness panel, plus
+    two context rows: the realised up/down indicator and the realised log return,
+    whose cross-ticker correlation is the underlying cause.
+    """
+    rows = []
+
+    for key in sorted(k for k in results[0]["predictions"] if k.startswith("clf::")):
+        name = key.split("::")[1]
+        panel = correctness_panel(results, key)
+        rows.append({
+            "quantity": f"correctness indicator: {name}",
+            **design_effect(panel),
+        })
+
+    # Context: the shared market moves that drive the correlation above.
+    reference = {r["symbol"]: r["predictions"]["clf::always_up"] for r in results}
+    direction_panel = pd.DataFrame(
+        {s: pd.Series(f["y_true"].to_numpy(), index=f.index) for s, f in reference.items()}
+    )
+    rows.append({"quantity": "realised up/down indicator", **design_effect(direction_panel)})
+
+    return_panel = pd.DataFrame({
+        r["symbol"]: pd.Series(
+            r["predictions"]["reg::zero"]["y_true"].to_numpy(),
+            index=r["predictions"]["reg::zero"].index,
+        )
+        for r in results
+    })
+    rows.append({"quantity": "realised log return", **design_effect(return_panel)})
+
+    return pd.DataFrame(rows)
+
+
+def score_pooled(
+    results: List[Dict],
+    config: Dict,
+    confidence: float = 0.95
+) -> Dict[str, pd.DataFrame]:
+    """
+    Score every model on all tickers' out-of-sample rows pooled together.
+
+    Pooled direction rows carry design-effect-adjusted intervals and p-values
+    alongside the iid ones. The tickers share calendar dates -- and SPY contains
+    the other four outright -- so an iid interval over the pooled panel is too
+    narrow. The point estimates are unaffected; only the uncertainty changes.
+    """
     labels = {**{f: MODEL_LABELS[f] for f in MODEL_LABELS},
               **REGRESSION_BASELINES, **DIRECTION_BASELINE}
 
@@ -353,16 +445,37 @@ def score_pooled(results: List[Dict], config: Dict) -> Dict[str, pd.DataFrame]:
             **return_regression_metrics(frame["y_true"], frame["y_pred"]),
         })
 
+    pooled_baseline = pool_predictions(results, "clf::")["clf::always_up"]
+    baseline_truth = pooled_baseline["y_true"].to_numpy()
+    baseline_accuracy = float((pooled_baseline["y_pred"].to_numpy() == baseline_truth).mean())
+
     dir_rows = []
     for key, frame in pool_predictions(results, "clf::").items():
         name = key.split("::")[1]
+        is_baseline = name in DIRECTION_BASELINE
+
+        metrics = direction_metrics(
+            frame["y_true"].to_numpy(), frame["y_pred"].to_numpy(),
+            reference_rate=baseline_accuracy,
+            reference_prediction=None if is_baseline
+            else pooled_baseline["y_pred"].to_numpy(),
+            confidence=confidence,
+        )
+
+        if len(results) > 1:
+            effect = design_effect(correctness_panel(results, key))
+            metrics.update({
+                "design_effect": effect["design_effect"],
+                "mean_pairwise_corr": effect["mean_pairwise_corr"],
+                **adjust_proportion_for_clustering(
+                    metrics["accuracy"], effect["n_effective"],
+                    reference_rate=baseline_accuracy, confidence=confidence,
+                ),
+            })
+
         dir_rows.append({
             "ticker": "POOLED", "model": labels.get(name, name),
-            "is_baseline": name in DIRECTION_BASELINE,
-            **direction_metrics(
-                frame["y_true"].to_numpy(), frame["y_pred"].to_numpy(),
-                float(frame["train_up_rate"].mean()),
-            ),
+            "is_baseline": is_baseline, **metrics,
         })
 
     return {
@@ -588,14 +701,18 @@ def main(
     results = [evaluate_ticker(symbol, config, start_date) for symbol in symbols]
 
     # --- Assemble tables ----------------------------------------------
+    confidence = config.get("evaluation", {}).get("confidence", 0.95)
+
     # A pooled row only says something new when more than one ticker ran.
     per_ticker_returns = pd.concat([score_returns(r) for r in results])
-    per_ticker_direction = pd.concat([score_direction(r) for r in results])
+    per_ticker_direction = pd.concat([score_direction(r, confidence) for r in results])
 
+    dependence_table = None
     if len(results) > 1:
-        pooled = score_pooled(results, config)
+        pooled = score_pooled(results, config, confidence)
         returns_table = pd.concat([per_ticker_returns, pooled["returns"]])
         direction_table = pd.concat([per_ticker_direction, pooled["direction"]])
+        dependence_table = score_pooled_dependence(results)
     else:
         returns_table, direction_table = per_ticker_returns, per_ticker_direction
 
@@ -630,25 +747,39 @@ def main(
             cost_rows.append(sweep)
     cost_table = pd.concat(cost_rows).reset_index(drop=True)
 
-    for frame, name in [
+    tables = [
         (returns_table, "return_regression"),
         (direction_table, "direction"),
         (backtest_table, "backtest"),
         (cost_table, "cost_sensitivity"),
         (trap_table, "level_r2_trap"),
         (fold_table, "walk_forward_folds"),
-    ]:
+    ]
+    if dependence_table is not None:
+        tables.append((dependence_table, "pooled_dependence"))
+
+    for frame, name in tables:
         write_table(frame, name, results_dir)
 
-    # --- Feature importance of the boosting model on the last ticker ---
+    # --- Feature importance, fitted on training rows only -----------------
+    # Fitting this on the full sample would mix out-of-sample rows into the
+    # reported importances, so it is pinned to the final fold's training window.
     last = results[-1]
     fs_cfg = config.get("feature_selection", {})
     k = fs_cfg.get("top_k", 40) if fs_cfg.get("enabled", True) else None
     k = min(k, len(last["model_features"])) if k else None
+
+    final_fold = last["folds"][-1]
+    importance_window = last["dataset"].iloc[final_fold.train_start:final_fold.train_end]
     pipeline = build_pipeline("boosting", "regression", k, fs_cfg.get("winsorize", True))
-    pipeline.fit(last["dataset"][last["model_features"]], last["dataset"]["target_logret"])
+    pipeline.fit(importance_window[last["model_features"]], importance_window["target_logret"])
+
     importance = get_feature_importance(pipeline, last["model_features"])
     importance.insert(0, "ticker", last["symbol"])
+    importance.insert(
+        1, "window",
+        f"fold {final_fold.index} train rows only (n={len(importance_window)})",
+    )
     write_table(importance.head(25), "feature_importance", results_dir)
 
     # Feature/target correlation, computed on the FIRST fold's training rows only.
@@ -678,12 +809,24 @@ def main(
     print(returns_table.to_string(index=False, float_format=lambda v: f"{v:.5f}"))
 
     print("\n" + "=" * 78)
-    print("DIRECTION")
+    print("DIRECTION (p_vs_reference = McNemar against the always-up baseline)")
     print("=" * 78)
-    print(direction_table[[
-        "ticker", "model", "n", "accuracy", "ci_lower", "ci_upper",
-        "p_vs_0.5", "p_vs_reference", "precision_up", "recall_up",
-    ]].to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+    columns = ["ticker", "model", "n", "accuracy", "ci_lower", "ci_upper",
+               "p_vs_0.5", "p_vs_reference", "precision_up", "recall_up"]
+    print(direction_table[[c for c in columns if c in direction_table]]
+          .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+
+    if dependence_table is not None:
+        print("\n" + "=" * 78)
+        print("POOLED PANEL DEPENDENCE (iid intervals would be too narrow)")
+        print("=" * 78)
+        print(dependence_table.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
+        print("\nDesign-effect-adjusted pooled direction:")
+        adjusted = direction_table[direction_table["ticker"] == "POOLED"]
+        adj_cols = ["model", "accuracy", "n", "n_effective", "design_effect",
+                    "adj_ci_lower", "adj_ci_upper", "adj_p_vs_0.5"]
+        print(adjusted[[c for c in adj_cols if c in adjusted]]
+              .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
 
     print("\n" + "=" * 78)
     print("BACKTEST vs BUY & HOLD (net of 15 bps per side)")

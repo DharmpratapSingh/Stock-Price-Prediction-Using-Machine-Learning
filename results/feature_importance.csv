@@ -1,26 +1,26 @@
-ticker,feature,importance
-JPM,dist_from_sma_20,0.052904509007930756
-JPM,parkinson_vol_10d,0.05077613145112991
-JPM,dist_from_sma_200,0.05028862506151199
-JPM,bb_width,0.04504253715276718
-JPM,log_return_1d,0.03613194450736046
-JPM,return_20d,0.036090511828660965
-JPM,bb_percent,0.03401218727231026
-JPM,dist_from_sma_50,0.03319702297449112
-JPM,dist_from_sma_100,0.032570187002420425
-JPM,gap,0.03247082978487015
-JPM,volume_roc,0.03207313269376755
-JPM,return_10d,0.03133535012602806
-JPM,return_1d,0.030585553497076035
-JPM,volatility_30d,0.028855962678790092
-JPM,daily_range,0.02817012183368206
-JPM,dist_from_sma_10,0.028060542419552803
-JPM,lower_shadow,0.028048064559698105
-JPM,body,0.027958128601312637
-JPM,dist_from_ema_50,0.02780408225953579
-JPM,log_return_5d,0.02704123593866825
-JPM,log_return_20d,0.02680613286793232
-JPM,minus_di,0.025957439094781876
-JPM,dist_from_ema_26,0.02588147111237049
-JPM,adx,0.024966254830360413
-JPM,volume_ratio,0.0246843621134758
+ticker,window,feature,importance
+JPM,fold 24 train rows only (n=2016),parkinson_vol_10d,0.061129700392484665
+JPM,fold 24 train rows only (n=2016),bb_width,0.05036468431353569
+JPM,fold 24 train rows only (n=2016),dist_from_sma_200,0.04869617521762848
+JPM,fold 24 train rows only (n=2016),parkinson_vol_20d,0.04077434167265892
+JPM,fold 24 train rows only (n=2016),volume_roc,0.037821441888809204
+JPM,fold 24 train rows only (n=2016),dist_from_ema_26,0.037359777837991714
+JPM,fold 24 train rows only (n=2016),dist_from_sma_20,0.03607778251171112
+JPM,fold 24 train rows only (n=2016),return_1d,0.03573257848620415
+JPM,fold 24 train rows only (n=2016),dist_from_sma_100,0.035030297935009
+JPM,fold 24 train rows only (n=2016),dist_from_sma_50,0.03424407169222832
+JPM,fold 24 train rows only (n=2016),gap,0.03194103389978409
+JPM,fold 24 train rows only (n=2016),volatility_10d,0.031743377447128296
+JPM,fold 24 train rows only (n=2016),return_20d,0.03155004233121872
+JPM,fold 24 train rows only (n=2016),roc_5,0.031018901616334915
+JPM,fold 24 train rows only (n=2016),parkinson_vol_30d,0.02985864132642746
+JPM,fold 24 train rows only (n=2016),daily_range,0.029138371348381042
+JPM,fold 24 train rows only (n=2016),body,0.02900727093219757
+JPM,fold 24 train rows only (n=2016),adx,0.028954455628991127
+JPM,fold 24 train rows only (n=2016),lower_shadow,0.02890002727508545
+JPM,fold 24 train rows only (n=2016),dist_from_ema_12,0.028700685128569603
+JPM,fold 24 train rows only (n=2016),dist_from_ema_50,0.02781364694237709
+JPM,fold 24 train rows only (n=2016),minus_di,0.02778281457722187
+JPM,fold 24 train rows only (n=2016),volume_ratio,0.026987068355083466
+JPM,fold 24 train rows only (n=2016),log_return_1d,0.026701660826802254
+JPM,fold 24 train rows only (n=2016),rsi_14,0.025624621659517288

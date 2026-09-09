@@ -444,6 +444,19 @@ class Backtester:
         ``n`` periods, not ``n + 1``. Counting the seed point as a trading day
         biased every annualised figure downward.
 
+        Two Sharpe definitions are reported, because they answer different
+        questions and disagree whenever the return path is not smooth:
+
+        ``sharpe_ratio``
+            ``(CAGR - rf) / annualised volatility``. Geometric in the numerator,
+            arithmetic in the denominator. This is the growth an investor actually
+            realised per unit of volatility, and it is the column quoted in
+            docs/PIPELINE.md.
+        ``sharpe_arithmetic``
+            ``mean(excess period return) / std(period return) * sqrt(252)``, the
+            textbook definition. Always the higher of the two for a volatile path,
+            because compounding penalises variance.
+
         Args:
             equity_curve: Length n+1, starting at initial capital
             trades: Trade list, for win rate and profit factor
@@ -467,6 +480,14 @@ class Backtester:
         volatility = float(np.std(returns) * np.sqrt(TRADING_DAYS) * 100) if len(returns) else 0.0
         excess_return = annualized_return / 100 - self.risk_free_rate
         sharpe_ratio = excess_return / (volatility / 100) if volatility else 0.0
+
+        # Textbook arithmetic Sharpe, reported alongside for comparability.
+        period_rf = self.risk_free_rate / TRADING_DAYS
+        period_std = float(np.std(returns)) if len(returns) else 0.0
+        sharpe_arithmetic = (
+            (float(np.mean(returns)) - period_rf) / period_std * np.sqrt(TRADING_DAYS)
+            if period_std else 0.0
+        )
 
         running_max = np.maximum.accumulate(equity_curve)
         drawdown = (equity_curve - running_max) / running_max
@@ -505,6 +526,7 @@ class Backtester:
             'annualized_return': float(annualized_return),
             'volatility': volatility,
             'sharpe_ratio': float(sharpe_ratio),
+            'sharpe_arithmetic': float(sharpe_arithmetic),
             'sortino_ratio': float(sortino_ratio),
             'max_drawdown': max_drawdown,
             'calmar_ratio': float(annualized_return / max_drawdown) if max_drawdown else 0.0,

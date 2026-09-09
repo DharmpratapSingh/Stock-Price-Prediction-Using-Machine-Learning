@@ -1,0 +1,26 @@
+ticker,window,feature,correlation
+JPM,fold 0 train rows only (n=504),volume_ratio,0.10022009129488559
+JPM,fold 0 train rows only (n=504),macd_bullish_cross,0.09811564071736205
+JPM,fold 0 train rows only (n=504),volume_roc,0.0814486511987459
+JPM,fold 0 train rows only (n=504),daily_range,0.0696955187000418
+JPM,fold 0 train rows only (n=504),adx,0.06218103819695315
+JPM,fold 0 train rows only (n=504),macd_bearish_cross,0.052737570626895144
+JPM,fold 0 train rows only (n=504),log_return_5d,0.045157419856842664
+JPM,fold 0 train rows only (n=504),return_5d,0.042579923789376355
+JPM,fold 0 train rows only (n=504),roc_5,0.042579923789376355
+JPM,fold 0 train rows only (n=504),upper_shadow,0.042181068577394766
+JPM,fold 0 train rows only (n=504),volatility_10d,0.041142509126751846
+JPM,fold 0 train rows only (n=504),dist_from_sma_10,0.037996470000337026
+JPM,fold 0 train rows only (n=504),dist_from_ema_12,0.03283285070798128
+JPM,fold 0 train rows only (n=504),bb_width,0.03175434947118256
+JPM,fold 0 train rows only (n=504),atr_14_pct,0.031574496306604465
+JPM,fold 0 train rows only (n=504),bb_percent,0.031038572324491805
+JPM,fold 0 train rows only (n=504),stoch_k,0.030173373044154874
+JPM,fold 0 train rows only (n=504),stoch_oversold,0.029956770872284134
+JPM,fold 0 train rows only (n=504),log_return_10d,0.02779757016698766
+JPM,fold 0 train rows only (n=504),roc_10,0.027435227155530796
+JPM,fold 0 train rows only (n=504),return_10d,0.027435227155530796
+JPM,fold 0 train rows only (n=504),dist_from_sma_100,0.026135098839112
+JPM,fold 0 train rows only (n=504),stoch_d,0.025818836429767685
+JPM,fold 0 train rows only (n=504),dist_from_sma_20,0.025732896703079614
+JPM,fold 0 train rows only (n=504),parkinson_vol_10d,0.02556629302787715

@@ -1,0 +1,26 @@
+ticker,window,feature,correlation
+NVDA,fold 0 train rows only (n=504),body,0.1772173963903679
+NVDA,fold 0 train rows only (n=504),return_1d,0.15799457969728156
+NVDA,fold 0 train rows only (n=504),log_return_1d,0.15383005019050616
+NVDA,fold 0 train rows only (n=504),lower_shadow,0.14998719964382298
+NVDA,fold 0 train rows only (n=504),upper_shadow,0.10363303342531506
+NVDA,fold 0 train rows only (n=504),adx,0.09763116511942399
+NVDA,fold 0 train rows only (n=504),volume_roc,0.09386532494870073
+NVDA,fold 0 train rows only (n=504),volume_ratio,0.08870248545173978
+NVDA,fold 0 train rows only (n=504),rsi_overbought,0.07553370429889389
+NVDA,fold 0 train rows only (n=504),bb_squeeze,0.06605649194296406
+NVDA,fold 0 train rows only (n=504),dist_from_sma_10,0.06489717999396072
+NVDA,fold 0 train rows only (n=504),dist_from_ema_12,0.05644100371481329
+NVDA,fold 0 train rows only (n=504),gap,0.043284851130050775
+NVDA,fold 0 train rows only (n=504),bb_width,0.04246172110640711
+NVDA,fold 0 train rows only (n=504),dist_from_sma_20,0.03722264198936384
+NVDA,fold 0 train rows only (n=504),roc_10,0.032953393210466655
+NVDA,fold 0 train rows only (n=504),return_10d,0.032953393210466655
+NVDA,fold 0 train rows only (n=504),log_return_10d,0.03240981066223384
+NVDA,fold 0 train rows only (n=504),macd_bullish_cross,0.026703330917202277
+NVDA,fold 0 train rows only (n=504),log_return_5d,0.025908809325327378
+NVDA,fold 0 train rows only (n=504),stoch_d,0.025616667980796922
+NVDA,fold 0 train rows only (n=504),daily_range,0.02547542086076641
+NVDA,fold 0 train rows only (n=504),dist_from_ema_26,0.022983344428364173
+NVDA,fold 0 train rows only (n=504),roc_5,0.02281905931661528
+NVDA,fold 0 train rows only (n=504),return_5d,0.02281905931661528

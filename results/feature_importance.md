@@ -1,0 +1,27 @@
+| ticker | feature | importance |
+|---|---|---|
+| JPM | dist_from_sma_20 | 0.0529 |
+| JPM | parkinson_vol_10d | 0.0508 |
+| JPM | dist_from_sma_200 | 0.0503 |
+| JPM | bb_width | 0.0450 |
+| JPM | log_return_1d | 0.0361 |
+| JPM | return_20d | 0.0361 |
+| JPM | bb_percent | 0.0340 |
+| JPM | dist_from_sma_50 | 0.0332 |
+| JPM | dist_from_sma_100 | 0.0326 |
+| JPM | gap | 0.0325 |
+| JPM | volume_roc | 0.0321 |
+| JPM | return_10d | 0.0313 |
+| JPM | return_1d | 0.0306 |
+| JPM | volatility_30d | 0.0289 |
+| JPM | daily_range | 0.0282 |
+| JPM | dist_from_sma_10 | 0.0281 |
+| JPM | lower_shadow | 0.0280 |
+| JPM | body | 0.0280 |
+| JPM | dist_from_ema_50 | 0.0278 |
+| JPM | log_return_5d | 0.0270 |
+| JPM | log_return_20d | 0.0268 |
+| JPM | minus_di | 0.0260 |
+| JPM | dist_from_ema_26 | 0.0259 |
+| JPM | adx | 0.0250 |
+| JPM | volume_ratio | 0.0247 |

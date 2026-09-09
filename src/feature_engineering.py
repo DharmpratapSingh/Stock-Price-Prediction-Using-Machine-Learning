@@ -5,7 +5,7 @@ Implements comprehensive technical indicators and features for stock prediction
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,8 @@ class FeatureEngineer:
         """
         self.data = data.copy()
         self.features = pd.DataFrame(index=data.index)
+        # Fallback period for the simplified ADX when no ATR column exists yet.
+        self.adx_period = 14
 
     def create_lag_features(self, columns: List[str] = ['Close'], lags: List[int] = [1, 2, 3, 5, 10]) -> pd.DataFrame:
         """
@@ -274,17 +276,18 @@ class FeatureEngineer:
 
         return self.features
 
-    def create_volume_features(self, window: int = 20) -> pd.DataFrame:
+    def create_volume_features(self, window: int = 20, include_obv: bool = True) -> pd.DataFrame:
         """
         Create volume-based features
 
         Args:
             window: Rolling window for volume calculations
+            include_obv: Whether to emit the cumulative OBV / VPT series
 
         Returns:
             DataFrame with volume features
         """
-        logger.info(f"Creating volume features with window {window}")
+        logger.info(f"Creating volume features with window {window} (obv={include_obv})")
 
         if 'Volume' not in self.data.columns:
             logger.warning("Volume data not available")
@@ -299,13 +302,14 @@ class FeatureEngineer:
         # Volume ratio
         self.features['volume_ratio'] = volume / self.features['volume_sma']
 
-        # On-Balance Volume (OBV)
-        obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
-        self.features['obv'] = obv
+        if include_obv:
+            # On-Balance Volume (OBV)
+            obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
+            self.features['obv'] = obv
 
-        # Volume-Price Trend
-        vpt = volume * (close.pct_change()).fillna(0)
-        self.features['vpt'] = vpt.cumsum()
+            # Volume-Price Trend
+            vpt = volume * (close.pct_change()).fillna(0)
+            self.features['vpt'] = vpt.cumsum()
 
         # Volume Rate of Change
         self.features['volume_roc'] = volume.pct_change(window)
@@ -400,19 +404,22 @@ class FeatureEngineer:
 
         return self.features
 
-    def create_trend_features(self) -> pd.DataFrame:
+    def create_trend_features(self, windows: List[int] = [10, 20, 50]) -> pd.DataFrame:
         """
         Create trend identification features
+
+        Args:
+            windows: Windows for the rolling linear-regression slope
 
         Returns:
             DataFrame with trend features
         """
-        logger.info("Creating trend features")
+        logger.info(f"Creating trend features for windows {windows}")
 
         close = self.data['Close']
 
         # Linear regression slope over different windows
-        for window in [10, 20, 50]:
+        for window in windows:
             slopes = []
             for i in range(len(close)):
                 if i < window:
@@ -436,10 +443,22 @@ class FeatureEngineer:
             plus_dm[plus_dm < 0] = 0
             minus_dm[minus_dm < 0] = 0
 
-            atr = self.features.get('atr_14', close.rolling(14).std())
+            # Reuse the configured ATR if it was already built, else fall back to
+            # a rolling standard deviation over the same period.
+            atr_col = next(
+                (c for c in self.features.columns
+                 if c.startswith('atr_') and not c.endswith('_pct')),
+                None
+            )
+            if atr_col is not None:
+                atr = self.features[atr_col]
+                atr_window = int(atr_col.split('_')[1])
+            else:
+                atr_window = self.adx_period
+                atr = close.rolling(atr_window).std()
 
-            plus_di = 100 * (plus_dm.rolling(14).mean() / atr)
-            minus_di = 100 * (minus_dm.rolling(14).mean() / atr)
+            plus_di = 100 * (plus_dm.rolling(atr_window).mean() / atr)
+            minus_di = 100 * (minus_dm.rolling(atr_window).mean() / atr)
 
             self.features['plus_di'] = plus_di
             self.features['minus_di'] = minus_di
@@ -447,22 +466,33 @@ class FeatureEngineer:
 
         return self.features
 
-    def create_all_features(self, config: Optional[Dict] = None) -> pd.DataFrame:
+    def create_all_features(
+        self,
+        config: Optional[Dict] = None,
+        dropna: bool = True
+    ) -> pd.DataFrame:
         """
-        Create all features based on configuration
+        Create all features based on configuration.
+
+        Every configurable period in ``config['features']`` is threaded through to
+        the method that uses it -- nothing is silently hard-coded. Every feature
+        at time t is a function of data at times <= t only.
 
         Args:
-            config: Configuration dictionary
+            config: The ``features`` block of the project config
+            dropna: Drop the leading warm-up rows that rolling windows leave NaN.
+                Pass False when you need the un-trimmed frame (e.g. to measure
+                the warm-up length for the walk-forward embargo).
 
         Returns:
-            DataFrame with all features
+            DataFrame with the original OHLCV columns plus all engineered features
         """
         logger.info("Creating all features")
 
         if config is None:
             config = {}
 
-        # Extract configuration
+        # Extract configuration -- keys match config/config.yaml exactly.
         lag_periods = config.get('lag_periods', [1, 2, 3, 5, 10, 20])
         sma_windows = config.get('sma_windows', [10, 20, 50, 100, 200])
         ema_windows = config.get('ema_windows', [12, 26, 50])
@@ -481,27 +511,36 @@ class FeatureEngineer:
             'k_period': config.get('stoch_k', 14),
             'd_period': config.get('stoch_d', 3)
         }
+        volume_window = config.get('volume_sma', 20)
+        include_obv = config.get('obv', True)
+        volatility_windows = config.get('rolling_std_windows', [10, 20, 30])
+        change_periods = config.get('price_changes', [1, 5, 10, 20])
+        momentum_periods = config.get('momentum_periods', [5, 10, 20])
+        trend_windows = config.get('trend_windows', [10, 20, 50])
+
+        self.adx_period = atr_period
 
         # Create all feature types
         self.create_lag_features(columns=['Close', 'Open', 'High', 'Low'], lags=lag_periods)
-        self.create_returns(periods=[1, 5, 10, 20])
+        self.create_returns(periods=change_periods)
         self.create_moving_averages(sma_windows=sma_windows, ema_windows=ema_windows)
         self.create_rsi(period=rsi_period)
         self.create_macd(**macd_config)
         self.create_bollinger_bands(**bb_config)
         self.create_atr(period=atr_period)
         self.create_stochastic_oscillator(**stoch_config)
-        self.create_volume_features()
-        self.create_volatility_features()
+        self.create_volume_features(window=volume_window, include_obv=include_obv)
+        self.create_volatility_features(windows=volatility_windows)
         self.create_price_patterns()
-        self.create_momentum_features()
-        self.create_trend_features()
+        self.create_momentum_features(periods=momentum_periods)
+        self.create_trend_features(windows=trend_windows)
 
         # Combine original data with features
         result = pd.concat([self.data, self.features], axis=1)
 
-        # Drop rows with NaN (from rolling calculations)
-        result = result.dropna()
+        if dropna:
+            # Drop the leading warm-up rows left NaN by rolling calculations
+            result = result.dropna()
 
         logger.info(f"Created {len(self.features.columns)} features")
         logger.info(f"Final dataset shape: {result.shape}")
@@ -509,45 +548,150 @@ class FeatureEngineer:
         return result
 
 
+# Raw OHLCV passthrough columns. They are kept on the dataset (the backtest needs
+# the spot close) but are never handed to a model as features.
+PRICE_COLUMNS = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+# Target columns produced by create_target_variable.
+TARGET_COLUMNS = ['target', 'target_logret', 'target_direction', 'target_price']
+
+# Feature-name prefixes that carry a raw price/volume *level*. A level feature is
+# non-stationary: a model fitted on 2018 price levels sees inputs in 2024 that lie
+# entirely outside its training range, so the fit does not transfer. The scale-free
+# transforms of the same indicators (dist_from_sma_*, bb_percent, rsi, ...) are kept.
+_LEVEL_PREFIXES = (
+    'Close_lag_', 'Open_lag_', 'High_lag_', 'Low_lag_',
+    'sma_', 'ema_', 'bb_upper', 'bb_middle', 'bb_lower',
+    'obv', 'vpt', 'volume_sma', 'macd_line', 'macd_signal', 'macd_histogram',
+    'momentum_', 'trend_slope_', 'atr_',
+)
+
+
+def _is_level_feature(name: str) -> bool:
+    """True when a feature is denominated in price or share units."""
+    if name.startswith('atr_') and name.endswith('_pct'):
+        return False  # ATR normalised by price is scale-free
+    return name.startswith(_LEVEL_PREFIXES)
+
+
+def feature_columns(data: pd.DataFrame, stationary_only: bool = True) -> List[str]:
+    """
+    Choose the model matrix columns from an engineered dataset.
+
+    Args:
+        data: Output of ``FeatureEngineer.create_all_features``, optionally with
+            target columns attached
+        stationary_only: Drop level-valued features (see ``_LEVEL_PREFIXES``).
+            This is a modelling decision, not a leakage fix: levels are legal
+            inputs, they simply do not generalise across a 10-year price range.
+
+    Returns:
+        Ordered list of feature column names
+    """
+    excluded = set(PRICE_COLUMNS) | set(TARGET_COLUMNS)
+    cols = [c for c in data.columns if c not in excluded]
+    if stationary_only:
+        cols = [c for c in cols if not _is_level_feature(c)]
+    return cols
+
+
+def feature_warmup_length(raw: pd.DataFrame, config: Optional[Dict] = None) -> int:
+    """
+    Measure how many past rows a single feature row depends on.
+
+    This is the number of leading rows that rolling windows leave NaN. It equals
+    the deepest lookback across the whole feature set, so it is exactly the
+    embargo needed between a training window and the next test window: with a gap
+    of this size, no test-fold feature row touches any row used for training.
+
+    Args:
+        raw: Raw OHLCV data
+        config: The ``features`` config block
+
+    Returns:
+        Warm-up length in rows
+    """
+    engineered = FeatureEngineer(raw).create_all_features(config, dropna=False)
+    valid = engineered.notna().all(axis=1)
+    if not valid.any():
+        raise ValueError("Feature matrix has no fully-valid row")
+    return int(np.argmax(valid.to_numpy()))
+
+
 def create_target_variable(
     data: pd.DataFrame,
-    target_type: str = 'price',
+    target_type: str = 'log_return',
     horizon: int = 1
 ) -> pd.DataFrame:
     """
-    Create target variable for prediction
+    Attach forward-looking target columns.
+
+    The primary target is the next-day log return, ``log(C(t+h) / C(t))``, plus
+    its sign for the direction task. The price level ``C(t+h)`` is also attached
+    but only so the level-R2 trap demonstration can be reproduced -- it is not a
+    modelling target (see docs/PIPELINE.md).
 
     Args:
-        data: DataFrame with features
-        target_type: Type of target ('price', 'return', 'direction')
-        horizon: Prediction horizon (days ahead)
+        data: DataFrame with a ``Close`` column
+        target_type: 'log_return' (default), 'direction', or 'price'
+        horizon: Prediction horizon in trading days
 
     Returns:
-        DataFrame with target variable
+        DataFrame with ``target`` plus the named target columns, rows with an
+        undefined target dropped
     """
     logger.info(f"Creating target variable: {target_type}, horizon: {horizon}")
 
     result = data.copy()
+    close = result['Close']
 
-    if target_type == 'price':
-        # Predict future price
-        result['target'] = result['Close'].shift(-horizon)
+    future_log_return = np.log(close.shift(-horizon) / close)
 
-    elif target_type == 'return':
-        # Predict future return
-        result['target'] = result['Close'].pct_change(horizon).shift(-horizon)
+    result['target_logret'] = future_log_return
+    result['target_direction'] = (future_log_return > 0).astype('int64')
+    result['target_price'] = close.shift(-horizon)
 
+    if target_type == 'log_return':
+        result['target'] = result['target_logret']
     elif target_type == 'direction':
-        # Predict direction (binary classification)
-        future_return = result['Close'].pct_change(horizon).shift(-horizon)
-        result['target'] = (future_return > 0).astype(int)
-
+        result['target'] = result['target_direction']
+    elif target_type == 'price':
+        result['target'] = result['target_price']
     else:
-        raise ValueError(f"Unknown target type: {target_type}")
+        raise ValueError(
+            f"Unknown target type: {target_type!r}. "
+            f"Use 'log_return', 'direction' or 'price'."
+        )
 
-    # Drop rows with NaN target
-    result = result.dropna(subset=['target'])
+    result = result.dropna(subset=['target_logret', 'target'])
 
     logger.info(f"Target variable created. Shape: {result.shape}")
 
     return result
+
+
+def build_dataset(
+    raw: pd.DataFrame,
+    config: Optional[Dict] = None,
+    horizon: int = 1,
+    stationary_only: bool = True
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Build the modelling dataset for one ticker in one call.
+
+    train.py and predict.py both go through this function, so inference builds
+    exactly the columns training used.
+
+    Args:
+        raw: Raw OHLCV data
+        config: The ``features`` config block
+        horizon: Prediction horizon in trading days
+        stationary_only: Restrict the model matrix to scale-free features
+
+    Returns:
+        (dataset with features + targets + OHLCV, ordered feature column names)
+    """
+    engineered = FeatureEngineer(raw).create_all_features(config, dropna=True)
+    dataset = create_target_variable(engineered, target_type='log_return', horizon=horizon)
+    cols = feature_columns(dataset, stationary_only=stationary_only)
+    return dataset, cols

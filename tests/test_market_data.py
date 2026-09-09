@@ -138,6 +138,38 @@ def test_load_prices_slices_cache_to_requested_range(tmp_path, monkeypatch):
     assert len(out) == len(expected)
 
 
+def test_load_prices_reuses_cache_when_start_is_not_a_trading_day(
+    tmp_path, monkeypatch
+):
+    """yfinance's first bar is the first trading day on or after `start`."""
+    _no_network(monkeypatch)
+
+    frame = _ohlcv_frame(_random_walk(n=300, seed=14, start="2017-10-02"))
+    cache_path = tmp_path / "sunday.csv"
+    frame.to_csv(cache_path)
+
+    # 2017-10-01 is a Sunday: the cache can never start exactly on it.
+    out = load_prices("NVDA", "2017-10-01", _day_after(frame.index[-1]), cache_path)
+
+    assert len(out) == len(frame)
+    assert out.index.min() == frame.index[0]
+
+
+def test_load_prices_cache_is_reused_across_repeated_calls(tmp_path, monkeypatch):
+    """A weekend start date must not re-download on every single call."""
+    frame = _ohlcv_frame(_random_walk(n=300, seed=15, start="2017-10-02"))
+    cache_path = tmp_path / "repeat.csv"
+    frame.to_csv(cache_path)
+
+    calls = _record_download(monkeypatch, lambda: _fake_yf_frame(seed=16))
+
+    end = _day_after(frame.index[-1])
+    for _ in range(3):
+        load_prices("NVDA", "2017-10-01", end, cache_path)
+
+    assert calls == []
+
+
 def test_load_prices_redownloads_when_cache_ends_too_early(tmp_path, monkeypatch):
     frame = _ohlcv_frame(_random_walk(seed=2))  # ends in Q1 2020
     cache_path = tmp_path / "short.csv"
@@ -234,6 +266,17 @@ def test_load_prices_downloads_with_auto_adjust(tmp_path, monkeypatch):
     cached = pd.read_csv(cache_path, index_col=0, parse_dates=True)
     assert cached.columns.tolist() == OHLCV
     assert len(cached) == len(out)
+
+
+def test_download_result_is_sliced_to_requested_range(tmp_path, monkeypatch):
+    _record_download(monkeypatch, _fake_yf_frame)  # 60 bars from 2020-01-01
+
+    start, end = "2020-02-01", "2020-03-01"
+    out = load_prices("NVDA", start, end, tmp_path / "sliced.csv")
+
+    assert len(out) > 0
+    assert out.index.min() >= pd.Timestamp(start)
+    assert out.index.max() < pd.Timestamp(end)
 
 
 def test_load_prices_refresh_bypasses_cache(tmp_path, monkeypatch):

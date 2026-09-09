@@ -116,12 +116,14 @@ def load_prices(
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(cache_path)
-    return df
+    return _slice_range(df, start_ts, end_ts)
 
 
-# Slack allowed between the requested end date and the last cached bar, so that
-# weekends, holidays and a not-yet-closed session do not force a re-download.
-_CACHE_END_TOLERANCE = pd.Timedelta(days=7)
+# Slack allowed at both edges of a cached range. The requested dates are plain
+# calendar dates, while cached bars only exist for trading days: a Sunday start
+# can never be matched exactly, and a weekend, holiday or not-yet-closed
+# session leaves the last bar short of the requested end.
+_CACHE_EDGE_TOLERANCE = pd.Timedelta(days=7)
 
 
 def _covers_range(
@@ -130,9 +132,9 @@ def _covers_range(
     """Whether a cached frame spans the requested ``[start, end)`` window."""
     if len(cached) == 0:
         return False
-    if cached.index.min() > start_ts:
+    if cached.index.min() > start_ts + _CACHE_EDGE_TOLERANCE:
         return False
-    return cached.index.max() >= end_ts - _CACHE_END_TOLERANCE
+    return cached.index.max() >= end_ts - _CACHE_EDGE_TOLERANCE
 
 
 def _slice_range(

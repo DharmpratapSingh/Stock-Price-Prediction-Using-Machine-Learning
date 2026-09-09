@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src import return_metrics, threshold_backtest
+from src._validation import as_1d
 from src.threshold_backtest import (
     SUMMARY_KEYS,
     backtest_long_flat,
@@ -27,6 +29,7 @@ TABLE_COLUMNS = [
     "max_drawdown",
     "n_trades",
     "days_in_market",
+    "eligible",
 ]
 
 # Predictions alternate low/high; the low days lose money and the high days
@@ -222,7 +225,7 @@ def test_select_threshold_picks_the_only_profitable_rule():
     thresholds = [0.0, 1.0, 2.0]
 
     best, table = select_threshold(
-        PRED_VAL, REALIZED_VAL, thresholds, cost_per_side=0.0
+        PRED_VAL, REALIZED_VAL, thresholds, cost_per_side=0.0, min_days_in_market=0
     )
 
     assert best == 1.0
@@ -238,7 +241,7 @@ def test_select_threshold_keeps_the_given_row_order():
     thresholds = [2.0, 0.0, 1.0]
 
     best, table = select_threshold(
-        PRED_VAL, REALIZED_VAL, thresholds, cost_per_side=0.0
+        PRED_VAL, REALIZED_VAL, thresholds, cost_per_side=0.0, min_days_in_market=0
     )
 
     assert list(table["threshold"]) == thresholds
@@ -249,7 +252,7 @@ def test_select_threshold_never_picks_a_nan_sharpe():
     # 2.0 sits above every prediction, so that rule is never long and its
     # Sharpe is undefined -- it must not win by being "not worse".
     best, table = select_threshold(
-        PRED_VAL, REALIZED_VAL, [1.0, 2.0], cost_per_side=0.0
+        PRED_VAL, REALIZED_VAL, [1.0, 2.0], cost_per_side=0.0, min_days_in_market=0
     )
     assert best == 1.0
     assert int(table.loc[1, "n_trades"]) == 0
@@ -257,18 +260,22 @@ def test_select_threshold_never_picks_a_nan_sharpe():
 
 def test_select_threshold_breaks_ties_on_the_lowest_threshold():
     # Both thresholds sit below every prediction, so both are always long.
-    best, _ = select_threshold(PRED_VAL, REALIZED_VAL, [0.2, 0.0], cost_per_side=0.0)
+    best, _ = select_threshold(
+        PRED_VAL, REALIZED_VAL, [0.2, 0.0], cost_per_side=0.0, min_days_in_market=0
+    )
     assert best == 0.0
 
 
 def test_select_threshold_rejects_an_empty_grid():
     with pytest.raises(ValueError):
-        select_threshold(PRED_VAL, REALIZED_VAL, [], cost_per_side=0.0)
+        select_threshold(PRED_VAL, REALIZED_VAL, [], cost_per_side=0.0, min_days_in_market=0)
 
 
 def test_select_threshold_rejects_an_all_nan_grid():
-    with pytest.raises(ValueError):
-        select_threshold(PRED_VAL, REALIZED_VAL, [2.0, 3.0], cost_per_side=0.0)
+    with pytest.raises(ValueError, match="undefined Sharpe"):
+        select_threshold(
+            PRED_VAL, REALIZED_VAL, [2.0, 3.0], cost_per_side=0.0, min_days_in_market=0
+        )
 
 
 # --------------------------------------------------------------------------
@@ -295,3 +302,145 @@ def test_backtest_rejects_bad_inputs(pred, realized):
 def test_buy_and_hold_rejects_bad_inputs(realized):
     with pytest.raises(ValueError):
         buy_and_hold(realized, cost_per_side=0.0)
+
+
+# --------------------------------------------------------------------------
+# participation guard
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lucky_day_sweep():
+    """A sweep where the sparsest rule has the best Sharpe on almost no days.
+
+    Fifty "broad" days carry a small genuine edge through real noise. Five
+    "lucky" days are clean 5% winners and nothing else. The lucky-only rule
+    scores the higher Sharpe, but it is five days of evidence.
+    """
+    n = 250
+    rng = np.random.default_rng(20)
+    realized = rng.normal(0.0, 0.025, n)
+    pred = np.zeros(n)
+
+    broad = np.arange(0, n, 5)  # 50 days
+    pred[broad] = 1.0
+    realized[broad] += 0.002
+
+    lucky = np.array([7, 57, 107, 157, 207])  # 5 days, disjoint from broad
+    pred[lucky] = 2.0
+    realized[lucky] = 0.05
+
+    return pred, realized
+
+
+def test_sparse_rule_wins_on_raw_sharpe_but_is_not_eligible(lucky_day_sweep):
+    pred, realized = lucky_day_sweep
+
+    best, table = select_threshold(
+        pred, realized, [0.5, 1.5], cost_per_side=0.0, min_days_in_market=20
+    )
+
+    # The premise: the five-day rule really does score better in isolation.
+    assert table.loc[1, "sharpe"] > table.loc[0, "sharpe"] > 0
+    assert table.loc[1, "days_in_market"] * len(realized) == pytest.approx(5)
+    # ...and it is still reported, just barred from winning.
+    assert list(table["eligible"]) == [True, False]
+    assert best == 0.5
+
+
+def test_min_days_in_market_zero_restores_the_raw_best(lucky_day_sweep):
+    pred, realized = lucky_day_sweep
+
+    best, table = select_threshold(
+        pred, realized, [0.5, 1.5], cost_per_side=0.0, min_days_in_market=0
+    )
+
+    assert list(table["eligible"]) == [True, True]
+    assert best == 1.5
+
+
+def test_select_threshold_says_when_nothing_is_eligible(lucky_day_sweep):
+    pred, realized = lucky_day_sweep
+
+    # The busiest rule trades 55 days, so a 100-day floor leaves nothing.
+    with pytest.raises(ValueError, match="at least 100"):
+        select_threshold(
+            pred, realized, [0.5, 1.5], cost_per_side=0.0, min_days_in_market=100
+        )
+
+
+# --------------------------------------------------------------------------
+# an undefined Sharpe stays undefined
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n", [7, 30, 100])
+def test_a_constant_net_series_has_no_sharpe(n):
+    # Floating-point noise makes the standard deviation ~1e-18 rather than a
+    # clean zero, which used to report a Sharpe around 9e16.
+    result = backtest_long_flat(np.ones(n), np.full(n, 0.01), 0.0, 0.0)
+    assert np.isnan(result["sharpe"])
+
+
+# --------------------------------------------------------------------------
+# scalar validation
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cost", [np.nan, np.inf, -0.001])
+def test_rejects_a_cost_that_is_not_a_finite_charge(cost):
+    with pytest.raises(ValueError):
+        backtest_long_flat(np.ones(5), np.zeros(5), threshold=0.0, cost_per_side=cost)
+    with pytest.raises(ValueError):
+        buy_and_hold(np.zeros(5), cost_per_side=cost)
+
+
+@pytest.mark.parametrize("threshold", [np.nan, np.inf, -np.inf])
+def test_rejects_a_non_finite_threshold(threshold):
+    with pytest.raises(ValueError):
+        backtest_long_flat(np.ones(5), np.zeros(5), threshold, cost_per_side=0.0)
+
+
+# --------------------------------------------------------------------------
+# input shapes
+# --------------------------------------------------------------------------
+
+
+def test_accepts_a_series_and_a_column_vector():
+    pred = np.array([1.0, -1.0, 1.0, 1.0])
+    realized = np.array([0.01, -0.02, 0.03, 0.005])
+    expected = backtest_long_flat(pred, realized, 0.0, 0.0005)
+
+    shapes = [
+        (pd.Series(pred), pd.Series(realized)),
+        (pred.reshape(-1, 1), realized.reshape(-1, 1)),
+    ]
+    for other_pred, other_realized in shapes:
+        result = backtest_long_flat(other_pred, other_realized, 0.0, 0.0005)
+        for key in SUMMARY_KEYS:
+            assert result[key] == pytest.approx(expected[key], nan_ok=True), key
+
+
+# --------------------------------------------------------------------------
+# shared validation
+# --------------------------------------------------------------------------
+
+
+def test_both_modules_use_the_one_shared_validator():
+    assert threshold_backtest.as_1d is as_1d
+    assert return_metrics.as_1d is as_1d
+    assert not hasattr(threshold_backtest, "_as_1d")
+    assert not hasattr(return_metrics, "_as_1d")
+
+
+def test_as_1d_allows_an_empty_array_only_when_asked():
+    assert as_1d("x", [], allow_empty=True).shape == (0,)
+    with pytest.raises(ValueError, match="non-empty"):
+        as_1d("x", [])
+
+
+def test_as_1d_keeps_its_error_messages():
+    with pytest.raises(ValueError, match="must be 1-D"):
+        as_1d("x", np.zeros((2, 2)))
+    with pytest.raises(ValueError, match="non-finite"):
+        as_1d("x", [1.0, np.nan])

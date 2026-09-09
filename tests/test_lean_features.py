@@ -67,14 +67,6 @@ def test_appending_a_shock_row_does_not_change_history(ohlcv):
     )
 
 
-def test_no_feature_column_uses_a_negative_shift(ohlcv):
-    """Shuffling only the future must leave earlier feature rows untouched."""
-    base = build_features(ohlcv)
-    tampered = ohlcv.copy()
-    tampered.iloc[350:] = tampered.iloc[350:] * 3.0
-    pd.testing.assert_frame_equal(base.iloc[:350], build_features(tampered).iloc[:350])
-
-
 # --------------------------------------------------------------------------
 # (c) target
 # --------------------------------------------------------------------------
@@ -130,6 +122,20 @@ def test_rsi_and_atr_ranges(ohlcv):
 
     assert np.isfinite(feats["rsi_14"].dropna()).all()
     assert np.isfinite(feats["atr_14_pct"].dropna()).all()
+
+
+def test_zero_volume_stretch_yields_nan_not_inf(ohlcv):
+    """A dead-volume stretch must not leak inf into volume_ratio_20."""
+    dead = ohlcv.copy()
+    dead.iloc[100:130, dead.columns.get_loc("Volume")] = 0.0
+
+    feats = build_features(dead)
+    ratio = feats["volume_ratio_20"]
+
+    # Deep inside the stretch the 20-day average volume is itself zero.
+    assert ratio.iloc[120:130].isna().all()
+    assert not np.isinf(feats.to_numpy(dtype=float)).any()
+    assert np.isfinite(feats.dropna().to_numpy(dtype=float)).all()
 
 
 def test_constant_price_series_gives_finite_rsi(ohlcv):

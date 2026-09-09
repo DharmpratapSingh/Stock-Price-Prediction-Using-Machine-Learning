@@ -6,6 +6,9 @@ split 4:1 in July 2021 and 10:1 in June 2024, so unadjusted closes contain fake
 one-day drops of roughly -75% and -90%. Training on those artifacts teaches a
 model to predict crashes that never happened. Every load is therefore checked
 by :func:`check_split_artifacts` before it is handed back to the caller.
+
+This is the canonical loader for ``run_experiment.py``; ``src/data_loader.py``
+and ``src/cache.py`` belong to the older ``train.py`` pipeline.
 """
 
 from __future__ import annotations
@@ -62,46 +65,81 @@ def load_prices(
     end: str,
     cache_path: str | Path,
     refresh: bool = False,
+    max_abs_return: float = 0.5,
 ) -> pd.DataFrame:
-    """Load split-adjusted OHLCV data, from cache when available.
+    """Load split-adjusted OHLCV data, from cache when it covers the range.
 
     Args:
         symbol: Ticker to download, e.g. ``"NVDA"``.
         start: Inclusive start date (``YYYY-MM-DD``).
-        end: Exclusive end date (``YYYY-MM-DD``).
+        end: Exclusive end date (``YYYY-MM-DD``), matching yfinance semantics.
         cache_path: CSV used as the local cache; written on download.
         refresh: Ignore an existing cache file and re-download.
+        max_abs_return: Tolerated absolute one-day return, passed to
+            :func:`check_split_artifacts`.
 
     Returns:
         DataFrame with columns ``Open, High, Low, Close, Volume`` and an
-        ascending, tz-naive ``DatetimeIndex`` named ``Date``.
+        ascending, tz-naive ``DatetimeIndex`` named ``Date``, restricted to
+        ``[start, end)``.
 
     Raises:
-        ValueError: If the resulting close series contains split artifacts.
+        ValueError: If the download is empty, or if the prices contain split
+            artifacts. A frame that fails validation is never cached.
     """
     cache_path = Path(cache_path)
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
 
     if cache_path.exists() and not refresh:
-        df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-        df = _normalize(df)
-    else:
-        raw = yf.download(
-            symbol,
-            start=start,
-            end=end,
-            auto_adjust=True,
-            progress=False,
-        )
-        if raw is None or len(raw) == 0:
-            raise ValueError(
-                f"No price data returned for {symbol} between {start} and {end}."
-            )
-        df = _normalize(_flatten_columns(raw))
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(cache_path)
+        cached = _normalize(pd.read_csv(cache_path, index_col=0, parse_dates=True))
+        if _covers_range(cached, start_ts, end_ts):
+            df = _slice_range(cached, start_ts, end_ts)
+            check_split_artifacts(df["Close"], max_abs_return=max_abs_return)
+            return df
 
-    check_split_artifacts(df["Close"])
+    raw = yf.download(
+        symbol,
+        start=start,
+        end=end,
+        auto_adjust=True,
+        progress=False,
+    )
+    if raw is None or len(raw) == 0:
+        raise ValueError(
+            f"No price data returned for {symbol} between {start} and {end}."
+        )
+
+    df = _normalize(_flatten_columns(raw))
+    # Validate *before* writing: a bad download must never poison the cache.
+    check_split_artifacts(df["Close"], max_abs_return=max_abs_return)
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(cache_path)
     return df
+
+
+# Slack allowed between the requested end date and the last cached bar, so that
+# weekends, holidays and a not-yet-closed session do not force a re-download.
+_CACHE_END_TOLERANCE = pd.Timedelta(days=7)
+
+
+def _covers_range(
+    cached: pd.DataFrame, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+) -> bool:
+    """Whether a cached frame spans the requested ``[start, end)`` window."""
+    if len(cached) == 0:
+        return False
+    if cached.index.min() > start_ts:
+        return False
+    return cached.index.max() >= end_ts - _CACHE_END_TOLERANCE
+
+
+def _slice_range(
+    df: pd.DataFrame, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+) -> pd.DataFrame:
+    """Restrict to ``[start, end)``; ``end`` is exclusive, as in yfinance."""
+    return df.loc[(df.index >= start_ts) & (df.index < end_ts)]
 
 
 def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:

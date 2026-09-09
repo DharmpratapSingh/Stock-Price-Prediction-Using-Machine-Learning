@@ -75,6 +75,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     features["vol_21"] = returns.rolling(21).std()
     features["volume_ratio_20"] = volume / volume.rolling(20).mean()
 
+    # Division-by-zero guards (a flat 20-day volume window, say) must surface
+    # as NaN so build_dataset drops the row rather than feeding a model inf.
+    features = features.replace([np.inf, -np.inf], np.nan)
     return features.loc[:, FEATURE_COLUMNS]
 
 
@@ -93,8 +96,7 @@ def build_dataset(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame with columns ``FEATURE_COLUMNS + ["target"]`` and no NaNs.
         The last row of ``df`` is always dropped because its target is unknown.
     """
-    dataset = build_features(df).join(build_target(df))
-    dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
+    dataset = build_features(df).join(build_target(df)).dropna()
     return dataset.loc[:, FEATURE_COLUMNS + [TARGET_COLUMN]]
 
 

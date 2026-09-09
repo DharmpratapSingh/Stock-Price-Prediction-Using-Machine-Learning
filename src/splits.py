@@ -40,23 +40,25 @@ def split_by_year(
             f"split_by_year requires a DatetimeIndex, got {type(df.index).__name__}."
         )
 
+    val_year = int(val_year)
+    test_year = int(test_year)
     train_end_ts = pd.Timestamp(train_end)
-    val_start = pd.Timestamp(year=int(val_year), month=1, day=1)
+    val_start = pd.Timestamp(year=val_year, month=1, day=1)
 
     if train_end_ts >= val_start:
         raise ValueError(
             f"train_end ({train_end_ts.date()}) must fall strictly before the "
             f"start of the validation year ({val_year})."
         )
-    if int(val_year) >= int(test_year):
+    if val_year >= test_year:
         raise ValueError(
             f"val_year ({val_year}) must be strictly before test_year ({test_year})."
         )
 
     index = df.index
     train = df.loc[index <= train_end_ts]
-    val = df.loc[index.year == int(val_year)]
-    test = df.loc[index.year == int(test_year)]
+    val = df.loc[index.year == val_year]
+    test = df.loc[index.year == test_year]
 
     empty = [
         name

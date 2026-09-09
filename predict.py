@@ -1,339 +1,239 @@
 """
-Prediction service for stock price prediction
-Makes predictions using trained models
+Inference CLI for next-day return prediction.
+
+Feature parity with training is structural, not a convention that has to be
+remembered: train.py saves one artifact holding the fitted pipeline, the exact
+ordered feature list and the config that built it, and this module rebuilds
+features by calling the same ``build_dataset`` with that same config, then
+selects the artifact's feature list by name. If the two ever diverge, the
+mismatch is raised here rather than silently producing a wrong number.
+
+The output is a forecast *log return* and its direction, never a price level
+presented as a precise target. A point forecast of tomorrow's close would look
+authoritative while carrying essentially no information beyond today's price.
+
+Usage:
+    python predict.py --model models/NVDA_linear.joblib
+    python predict.py --model models/NVDA_linear.joblib --symbol AAPL
+    python predict.py --model models/NVDA_linear.joblib --batch --symbols SPY AAPL MSFT
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
 from pathlib import Path
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from typing import Dict, List
 
-from src.utils import load_config, setup_logging, load_model
+import numpy as np
+import pandas as pd
+
 from src.data_loader import load_stock_data
-from src.feature_engineering import FeatureEngineer
-from src.visualize import StockVisualizer
+from src.feature_engineering import build_dataset
+from src.utils import load_artifact, setup_logging
 
 logger = logging.getLogger(__name__)
 
 
-def predict(
-    model_path: str,
-    config_path: str = "config/config.yaml",
-    symbol: str = None,
-    days_ahead: int = 1,
-    plot: bool = True
-):
+def build_inference_features(
+    symbol: str,
+    artifact: Dict,
+    allow_download: bool = False
+) -> pd.DataFrame:
     """
-    Make predictions using trained model
+    Rebuild the model matrix for a ticker exactly as training built it.
 
     Args:
-        model_path: Path to saved model
-        config_path: Path to configuration file
-        symbol: Stock symbol (overrides config)
-        days_ahead: Number of days ahead to predict
-        plot: Whether to plot results
+        symbol: Ticker symbol
+        artifact: Loaded training artifact
+        allow_download: Permit a network fetch when no snapshot exists
+
+    Returns:
+        DataFrame of engineered features, restricted and ordered to match the
+        artifact's feature list, with the raw OHLCV columns still attached
+
+    Raises:
+        ValueError: if any training feature is missing at inference time
     """
-    # Load configuration
-    config = load_config(config_path)
+    config = artifact["config"]
+    data_cfg = config["data"]
 
-    # Setup logging
-    setup_logging(log_level=config.get('logging', {}).get('level', 'INFO'))
-
-    logger.info("=" * 80)
-    logger.info("STOCK PRICE PREDICTION SERVICE")
-    logger.info("=" * 80)
-
-    # Load model
-    logger.info(f"\n📦 Loading model from {model_path}...")
-    model_wrapper = load_model(model_path)
-
-    # Extract model components
-    if isinstance(model_wrapper, dict):
-        model = model_wrapper.get('model')
-        scaler = model_wrapper.get('scaler')
-        model_name = model_wrapper.get('model_name', 'Unknown')
-    else:
-        # If it's a model object directly
-        from src.models import get_model
-        model_obj = model_wrapper
-        model_name = model_obj.model_name if hasattr(model_obj, 'model_name') else 'Unknown'
-
-    logger.info(f"Model loaded: {model_name}")
-
-    # Determine symbol
-    symbol = symbol or config['data']['symbol']
-
-    # Load data
-    logger.info(f"\n📊 Loading recent data for {symbol}...")
-
-    # Get recent data (last year for feature calculation)
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-
-    data = load_stock_data(
+    raw = load_stock_data(
         symbol=symbol,
-        start_date=start_date,
-        end_date=end_date,
-        validate=True,
-        clean=True
+        start_date=data_cfg["start_date"],
+        end_date=data_cfg["end_date"],
+        snapshot_dir=data_cfg.get("snapshot_dir", "data/raw"),
+        allow_download=allow_download or data_cfg.get("allow_download", False),
     )
 
-    logger.info(f"Loaded {len(data)} records")
-    logger.info(f"Latest date: {data.index[-1]}")
+    dataset, _ = build_dataset(
+        raw,
+        config["features"],
+        horizon=artifact.get("horizon", 1),
+        stationary_only=config["features"].get("stationary_only", True),
+    )
 
-    # Feature engineering
-    logger.info("\n🔧 Engineering features...")
-    feature_engineer = FeatureEngineer(data)
-    featured_data = feature_engineer.create_all_features(config['features'])
+    expected = list(artifact["feature_columns"])
+    missing = [c for c in expected if c not in dataset.columns]
+    if missing:
+        raise ValueError(
+            f"Feature parity check failed for {symbol}: the artifact was fitted on "
+            f"{len(expected)} features but {len(missing)} are missing from the "
+            f"inference matrix: {missing[:10]}. Retrain with the current config."
+        )
 
-    # Get latest data point
-    latest_data = featured_data.iloc[-1:]
+    return dataset
 
-    # Remove target if it exists
-    feature_cols = [col for col in latest_data.columns if col not in ['target', 'Close']]
-    X_latest = latest_data[feature_cols]
 
-    logger.info(f"Latest data point: {latest_data.index[0]}")
-    logger.info(f"Current price: ${data['Close'].iloc[-1]:.2f}")
+def predict(
+    model_path: str,
+    symbol: str = None,
+    allow_download: bool = False,
+    n_recent: int = 1
+) -> pd.DataFrame:
+    """
+    Forecast the next-day log return for the most recent available bar(s).
 
-    # Make prediction
-    logger.info(f"\n🎯 Making prediction for {days_ahead} day(s) ahead...")
+    Args:
+        model_path: Path to a train.py artifact
+        symbol: Ticker to predict (defaults to the artifact's training ticker)
+        allow_download: Permit a network fetch
+        n_recent: How many trailing bars to score
 
-    # For single day prediction
-    if isinstance(model_wrapper, dict):
-        # Manual prediction using saved scaler and model
-        X_scaled = scaler.transform(X_latest)
-        prediction = model.predict(X_scaled)[0]
+    Returns:
+        DataFrame with one row per scored bar
+    """
+    artifact = load_artifact(model_path)
+    symbol = (symbol or artifact["symbol"]).upper()
+
+    logger.info(
+        "Artifact: %s family, trained on %s through %s (%d rows, %d features)",
+        artifact.get("family"), artifact.get("symbol"),
+        artifact.get("trained_through"), artifact.get("n_train_rows", 0),
+        len(artifact["feature_columns"]),
+    )
+
+    dataset = build_inference_features(symbol, artifact, allow_download)
+    features = artifact["feature_columns"]
+
+    recent = dataset.iloc[-n_recent:]
+    X = recent[features]
+
+    predicted_log_return = np.asarray(artifact["pipeline"].predict(X), dtype=float)
+
+    direction_pipeline = artifact.get("direction_pipeline")
+    if direction_pipeline is not None:
+        up_probability = direction_pipeline.predict_proba(X)[:, 1]
     else:
-        # Use model object's predict method
-        prediction = model_wrapper.predict(X_latest)[0]
+        up_probability = np.full(len(recent), np.nan)
 
-    current_price = data['Close'].iloc[-1]
-    predicted_price = prediction
-    price_change = predicted_price - current_price
-    pct_change = (price_change / current_price) * 100
+    spot = recent["Close"].to_numpy()
 
-    # Display results
-    logger.info("\n" + "=" * 80)
-    logger.info("PREDICTION RESULTS")
-    logger.info("=" * 80)
-    logger.info(f"\n📅 Date: {datetime.now().strftime('%Y-%m-%d')}")
-    logger.info(f"📈 Symbol: {symbol}")
-    logger.info(f"💰 Current Price: ${current_price:.2f}")
-    logger.info(f"🔮 Predicted Price ({days_ahead} day): ${predicted_price:.2f}")
-    logger.info(f"📊 Expected Change: ${price_change:.2f} ({pct_change:+.2f}%)")
+    out = pd.DataFrame(
+        {
+            "symbol": symbol,
+            "as_of": recent.index.date,
+            "spot_close": spot,
+            "predicted_log_return": predicted_log_return,
+            "predicted_pct_move": np.expm1(predicted_log_return) * 100,
+            "implied_next_close": spot * np.exp(predicted_log_return),
+            "direction": np.where(predicted_log_return > 0, "up", "down"),
+            "p_up": up_probability,
+        }
+    )
 
-    if pct_change > 0:
-        signal = "🟢 BUY SIGNAL"
-    elif pct_change < -0.5:
-        signal = "🔴 SELL SIGNAL"
-    else:
-        signal = "🟡 HOLD SIGNAL"
-
-    logger.info(f"🎯 Trading Signal: {signal}")
-    logger.info("=" * 80)
-
-    # Plot recent prices and prediction
-    if plot:
-        logger.info("\n📊 Creating visualization...")
-
-        visualizer = StockVisualizer()
-
-        # Get last 60 days for plotting
-        plot_data = data.tail(60)
-
-        # Create future date
-        future_date = plot_data.index[-1] + pd.Timedelta(days=days_ahead)
-
-        # Combine historical and predicted
-        dates = plot_data.index.tolist() + [future_date]
-        prices = plot_data['Close'].tolist() + [predicted_price]
-
-        # Create figure
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots(figsize=(14, 6))
-
-        # Plot historical
-        ax.plot(plot_data.index, plot_data['Close'],
-               label='Historical', linewidth=2, color='blue')
-
-        # Plot prediction
-        ax.plot([plot_data.index[-1], future_date],
-               [plot_data['Close'].iloc[-1], predicted_price],
-               label='Predicted', linewidth=2, color='red',
-               linestyle='--', marker='o', markersize=8)
-
-        ax.set_xlabel('Date', fontsize=12)
-        ax.set_ylabel('Price ($)', fontsize=12)
-        ax.set_title(f'{symbol} Stock Price Prediction', fontsize=14, fontweight='bold')
-        ax.legend(fontsize=10)
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.show()
-
-    return {
-        'symbol': symbol,
-        'current_price': current_price,
-        'predicted_price': predicted_price,
-        'price_change': price_change,
-        'pct_change': pct_change,
-        'signal': signal,
-        'date': datetime.now().strftime('%Y-%m-%d')
-    }
+    # The realised outcome is known for every bar except the last one, so the
+    # CLI can be checked against reality rather than taken on trust.
+    out["realised_log_return"] = recent["target_logret"].to_numpy()
+    return out
 
 
 def batch_predict(
     model_path: str,
-    config_path: str = "config/config.yaml",
-    symbols: list = None,
-    output_file: str = "predictions.csv"
-):
+    symbols: List[str],
+    output_file: str = None,
+    allow_download: bool = False
+) -> pd.DataFrame:
     """
-    Make predictions for multiple stocks
+    Score several tickers with one artifact.
 
     Args:
-        model_path: Path to saved model
-        config_path: Path to configuration file
-        symbols: List of stock symbols
-        output_file: Output CSV file path
+        model_path: Path to a train.py artifact
+        symbols: Tickers to score
+        output_file: Optional CSV destination
+        allow_download: Permit a network fetch
+
+    Returns:
+        Concatenated predictions
     """
-    if symbols is None:
-        symbols = ['NVDA', 'AMD', 'TSM', 'INTC']
-
-    logger.info(f"Making predictions for {len(symbols)} stocks...")
-
-    results = []
-
+    frames = []
     for symbol in symbols:
         try:
-            logger.info(f"\nProcessing {symbol}...")
-            result = predict(
-                model_path=model_path,
-                config_path=config_path,
-                symbol=symbol,
-                plot=False
-            )
-            results.append(result)
+            frames.append(predict(model_path, symbol, allow_download))
+        except Exception as exc:
+            logger.error("Skipping %s: %s", symbol, exc)
 
-        except Exception as e:
-            logger.error(f"Error processing {symbol}: {str(e)}")
-            continue
+    if not frames:
+        raise RuntimeError("No symbol could be scored")
 
-    # Create DataFrame
-    df = pd.DataFrame(results)
-
-    # Save to file
-    df.to_csv(output_file, index=False)
-    logger.info(f"\n📁 Predictions saved to {output_file}")
-
-    # Display results
-    print("\n" + "=" * 80)
-    print("BATCH PREDICTION RESULTS")
-    print("=" * 80)
-    print(df.to_string(index=False))
-    print("=" * 80)
-
-    return df
+    result = pd.concat(frames, ignore_index=True)
+    if output_file:
+        result.to_csv(output_file, index=False)
+        logger.info("Wrote %s", output_file)
+    return result
 
 
-def interactive_predict(config_path: str = "config/config.yaml"):
-    """
-    Interactive prediction mode
-
-    Args:
-        config_path: Path to configuration file
-    """
-    print("=" * 80)
-    print("INTERACTIVE STOCK PRICE PREDICTION")
-    print("=" * 80)
-
-    # List available models
-    config = load_config(config_path)
-    models_dir = Path(config['paths']['models_dir'])
-
-    if not models_dir.exists() or not any(models_dir.iterdir()):
-        print("\n❌ No trained models found. Please run train.py first.")
-        return
-
-    model_files = list(models_dir.glob("*.joblib"))
-
-    print("\n📦 Available models:")
-    for i, model_file in enumerate(model_files, 1):
-        print(f"  {i}. {model_file.name}")
-
-    # Get user input
-    while True:
-        try:
-            choice = int(input("\nSelect model (number): "))
-            if 1 <= choice <= len(model_files):
-                model_path = model_files[choice - 1]
-                break
-            else:
-                print("Invalid choice. Please try again.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    # Get symbol
-    symbol = input("\nEnter stock symbol (default: NVDA): ").strip().upper()
-    if not symbol:
-        symbol = "NVDA"
-
-    # Get days ahead
-    days_ahead = input("\nDays ahead to predict (default: 1): ").strip()
-    days_ahead = int(days_ahead) if days_ahead else 1
-
-    # Make prediction
-    predict(
-        model_path=str(model_path),
-        config_path=config_path,
-        symbol=symbol,
-        days_ahead=days_ahead,
-        plot=True
+def print_predictions(frame: pd.DataFrame) -> None:
+    """Print a forecast table with the honest caveat attached."""
+    print("\n" + "=" * 78)
+    print("NEXT-DAY RETURN FORECAST")
+    print("=" * 78)
+    print(frame.to_string(index=False, float_format=lambda v: f"{v:.5f}"))
+    print("-" * 78)
+    print(
+        "Walk-forward testing puts this model's out-of-sample return R2 at roughly\n"
+        "zero and its directional accuracy within sampling error of a coin flip.\n"
+        "Treat these as an illustration of the pipeline, not a trading signal."
     )
+    print("=" * 78 + "\n")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Forecast the next-day log return from a trained artifact"
+    )
+    parser.add_argument("--model", help="Path to a train.py artifact (.joblib)")
+    parser.add_argument("--symbol", help="Ticker to score")
+    parser.add_argument("--symbols", nargs="+", help="Tickers for batch mode")
+    parser.add_argument("--batch", action="store_true", help="Batch mode")
+    parser.add_argument("--recent", type=int, default=1,
+                        help="Number of trailing bars to score")
+    parser.add_argument("--download", action="store_true",
+                        help="Allow fetching data not present as a snapshot")
+    parser.add_argument("--output", help="CSV output path for batch mode")
+    parser.add_argument("--log-level", default="INFO")
+
+    args = parser.parse_args()
+    setup_logging(args.log_level)
+
+    model_path = args.model
+    if not model_path:
+        candidates = sorted(Path("models").glob("*.joblib"))
+        if not candidates:
+            parser.error("No --model given and no artifact found in models/. Run train.py first.")
+        model_path = str(candidates[-1])
+        logger.info("No --model given, using %s", model_path)
+
+    if args.batch:
+        symbols = args.symbols or [args.symbol]
+        if not symbols or symbols == [None]:
+            parser.error("--batch requires --symbols")
+        frame = batch_predict(model_path, symbols, args.output, args.download)
+    else:
+        frame = predict(model_path, args.symbol, args.download, args.recent)
+
+    print_predictions(frame)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Stock price prediction service')
-    parser.add_argument('--model', type=str, help='Path to trained model')
-    parser.add_argument('--config', type=str, default='config/config.yaml',
-                       help='Path to configuration file')
-    parser.add_argument('--symbol', type=str, help='Stock symbol')
-    parser.add_argument('--days', type=int, default=1,
-                       help='Days ahead to predict')
-    parser.add_argument('--batch', action='store_true',
-                       help='Batch prediction mode')
-    parser.add_argument('--symbols', nargs='+',
-                       help='List of symbols for batch prediction')
-    parser.add_argument('--interactive', action='store_true',
-                       help='Interactive mode')
-    parser.add_argument('--no-plot', action='store_true',
-                       help='Disable plotting')
-
-    args = parser.parse_args()
-
-    if args.interactive:
-        interactive_predict(config_path=args.config)
-    elif args.batch:
-        if not args.model:
-            print("Error: --model is required for batch prediction")
-        else:
-            batch_predict(
-                model_path=args.model,
-                config_path=args.config,
-                symbols=args.symbols
-            )
-    else:
-        if not args.model:
-            print("Error: --model is required. Use --interactive for interactive mode.")
-        else:
-            predict(
-                model_path=args.model,
-                config_path=args.config,
-                symbol=args.symbol,
-                days_ahead=args.days,
-                plot=not args.no_plot
-            )
+    main()

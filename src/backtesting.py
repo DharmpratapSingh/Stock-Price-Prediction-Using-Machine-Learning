@@ -1,41 +1,238 @@
 """
-Backtesting framework for stock price prediction models
-Tests models with realistic trading scenarios including costs
+Cost-aware backtesting for stock prediction models.
+
+Two entry points:
+
+``Backtester.long_flat_backtest``
+    The return-space backtest the walk-forward pipeline uses. Positions are
+    long/flat, decided from a forecast log return, and charged commission plus
+    slippage on every position change.
+
+``Backtester.simple_strategy`` / ``Backtester.buy_and_hold_strategy``
+    The share-based simulation, kept for the price-level path.
+
+Conventions, applied identically to every strategy so results are comparable:
+
+*Equity-curve contract.* Every strategy returns an equity curve of length
+``n + 1`` for ``n`` bars. ``equity_curve[0]`` is the initial capital before any
+trade; ``equity_curve[i]`` for ``i >= 1`` is the mark-to-market equity after bar
+``i - 1`` has been acted on. So ``np.diff(equity_curve)`` gives exactly ``n``
+period returns.
+
+*Symmetric costs.* Every strategy may transact on bar 0 and every strategy
+liquidates any open position on the final bar, paying commission and slippage
+both times. The previous code let the ML strategy sit out bar 0 for free while
+buy-and-hold paid to enter, which flattered the ML strategy by roughly ``1/n``.
+
+*One total return.* ``results['total_return']`` and
+``results['metrics']['total_return']`` are the same number, both net of exit
+costs, because the final equity-curve point is the post-liquidation value.
 """
+
+from __future__ import annotations
+
+import logging
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
-import logging
 
 logger = logging.getLogger(__name__)
 
+TRADING_DAYS = 252
+
 
 class Backtester:
-    """
-    Backtesting engine for stock prediction models
-    """
+    """Backtesting engine for stock prediction models."""
 
     def __init__(
         self,
         initial_capital: float = 100000,
-        commission: float = 0.001,  # 0.1%
-        slippage: float = 0.0005,   # 0.05%
-        position_size: float = 1.0   # Fraction of capital to use per trade
+        commission: float = 0.001,   # 10 bps per side
+        slippage: float = 0.0005,    # 5 bps per side
+        position_size: float = 1.0,  # Fraction of capital per trade
+        risk_free_rate: float = 0.0  # Annual, used for Sharpe/Sortino
     ):
         """
-        Initialize backtester
-
         Args:
             initial_capital: Starting capital
-            commission: Commission per trade (as fraction)
-            slippage: Slippage per trade (as fraction)
-            position_size: Position size as fraction of capital
+            commission: Commission per side, as a fraction of trade value
+            slippage: Slippage per side, as a fraction of trade value
+            position_size: Fraction of capital deployed per trade
+            risk_free_rate: Annual risk-free rate for risk-adjusted ratios.
+                Defaults to 0, so Sharpe is the raw risk-adjusted return rather
+                than an excess-over-cash claim.
         """
         self.initial_capital = initial_capital
         self.commission = commission
         self.slippage = slippage
         self.position_size = position_size
+        self.risk_free_rate = risk_free_rate
+
+    @property
+    def cost_per_side(self) -> float:
+        """Round-trip cost is charged per side: commission + slippage."""
+        return self.commission + self.slippage
+
+    # ------------------------------------------------------------------
+    # Return-space backtest (used by the walk-forward pipeline)
+    # ------------------------------------------------------------------
+
+    def long_flat_backtest(
+        self,
+        predicted_returns: np.ndarray,
+        actual_returns: np.ndarray,
+        dates: pd.DatetimeIndex,
+        threshold: float = 0.0,
+        cost_per_side: Optional[float] = None
+    ) -> Dict[str, any]:
+        """
+        Long/flat backtest driven by a forecast of the next period's return.
+
+        Signal: go long when the forecast next-day log return exceeds
+        ``threshold``, otherwise hold cash. This is a forecast-versus-spot signal
+        -- the forecast is already expressed relative to today's price -- not
+        momentum in the forecast series.
+
+        Timing: the position for bar ``i`` is chosen from the forecast made at
+        the close of bar ``i`` and earns ``actual_returns[i]``, the realised
+        return from bar ``i`` to bar ``i + 1``. Costs are charged whenever the
+        position changes, including the entry on bar 0 and the liquidation after
+        the final bar.
+
+        Args:
+            predicted_returns: Forecast log returns, one per bar
+            actual_returns: Realised log returns, one per bar
+            dates: Date index, one per bar
+            threshold: Minimum forecast return required to hold the position
+            cost_per_side: Override the instance commission + slippage, as a
+                fraction (used for the cost-sensitivity sweep)
+
+        Returns:
+            Dict with equity_curve (length n+1), positions, metrics, turnover
+        """
+        predicted = np.asarray(predicted_returns, dtype=float)
+        actual = np.asarray(actual_returns, dtype=float)
+
+        if len(predicted) != len(actual):
+            raise ValueError(
+                f"predicted_returns ({len(predicted)}) and actual_returns "
+                f"({len(actual)}) must be the same length"
+            )
+
+        cost = self.cost_per_side if cost_per_side is None else cost_per_side
+        n = len(actual)
+
+        positions = (predicted > threshold).astype(float)
+        simple_returns = np.expm1(actual)  # log return -> simple return
+
+        # Position changes, including entry from flat and final liquidation.
+        prior = np.concatenate([[0.0], positions])
+        trades = np.abs(np.diff(np.concatenate([prior, [0.0]])))
+        entry_costs, exit_cost = trades[:n], trades[n]
+
+        equity = np.empty(n + 1)
+        equity[0] = self.initial_capital
+        for i in range(n):
+            gross = 1 + positions[i] * simple_returns[i]
+            equity[i + 1] = equity[i] * (gross - entry_costs[i] * cost)
+
+        # Liquidate whatever is still open on the last bar.
+        equity[n] *= 1 - exit_cost * cost
+
+        metrics = self._calculate_backtest_metrics(equity, n_trades=int(trades.sum()))
+        metrics['turnover'] = float(trades.sum())
+        metrics['turnover_per_year'] = float(trades.sum() / (n / TRADING_DAYS)) if n else 0.0
+        metrics['time_in_market'] = float(positions.mean()) if n else 0.0
+        metrics['cost_per_side_bps'] = cost * 10000
+
+        return {
+            'equity_curve': equity,
+            'positions': positions,
+            'dates': dates,
+            'final_equity': float(equity[-1]),
+            'total_return': metrics['total_return'],
+            'metrics': metrics,
+        }
+
+    def buy_and_hold_returns(
+        self,
+        actual_returns: np.ndarray,
+        dates: pd.DatetimeIndex,
+        cost_per_side: Optional[float] = None
+    ) -> Dict[str, any]:
+        """
+        Buy-and-hold benchmark in return space, on the same bars and cost model.
+
+        Implemented as a long/flat backtest whose forecast is always positive, so
+        it goes through exactly the same code path, pays the same entry and exit
+        costs, and is scored over the same number of bars.
+
+        Args:
+            actual_returns: Realised log returns, one per bar
+            dates: Date index
+            cost_per_side: Override commission + slippage
+
+        Returns:
+            Same structure as long_flat_backtest
+        """
+        always_long = np.ones(len(actual_returns))
+        return self.long_flat_backtest(
+            predicted_returns=always_long,
+            actual_returns=actual_returns,
+            dates=dates,
+            threshold=0.0,
+            cost_per_side=cost_per_side,
+        )
+
+    def cost_sensitivity(
+        self,
+        predicted_returns: np.ndarray,
+        actual_returns: np.ndarray,
+        dates: pd.DatetimeIndex,
+        cost_grid_bps: List[float] = (0, 5, 10, 20),
+        threshold: float = 0.0
+    ) -> pd.DataFrame:
+        """
+        Re-run the strategy and the benchmark across a grid of per-side costs.
+
+        A strategy that only wins at zero cost has not found anything tradeable.
+
+        Args:
+            predicted_returns: Forecast log returns
+            actual_returns: Realised log returns
+            dates: Date index
+            cost_grid_bps: Per-side costs in basis points
+            threshold: Signal threshold
+
+        Returns:
+            DataFrame, one row per cost level
+        """
+        rows = []
+        for bps in cost_grid_bps:
+            cost = bps / 10000.0
+            strat = self.long_flat_backtest(
+                predicted_returns, actual_returns, dates, threshold, cost
+            )
+            bench = self.buy_and_hold_returns(actual_returns, dates, cost)
+            rows.append({
+                'cost_bps_per_side': bps,
+                'strategy_total_return_pct': strat['metrics']['total_return'],
+                'strategy_annualized_pct': strat['metrics']['annualized_return'],
+                'strategy_sharpe': strat['metrics']['sharpe_ratio'],
+                'strategy_max_drawdown_pct': strat['metrics']['max_drawdown'],
+                'buy_hold_total_return_pct': bench['metrics']['total_return'],
+                'buy_hold_sharpe': bench['metrics']['sharpe_ratio'],
+                'excess_vs_buy_hold_pct': (
+                    strat['metrics']['total_return'] - bench['metrics']['total_return']
+                ),
+                'turnover': strat['metrics']['turnover'],
+            })
+        return pd.DataFrame(rows)
+
+    # ------------------------------------------------------------------
+    # Share-based backtest (price-level path)
+    # ------------------------------------------------------------------
 
     def simple_strategy(
         self,
@@ -45,124 +242,107 @@ class Backtester:
         threshold: float = 0.01
     ) -> Dict[str, any]:
         """
-        Simple trading strategy based on predictions
+        Threshold strategy on a forecast of tomorrow's price.
 
-        Strategy:
-        - Buy if predicted return > threshold
-        - Sell if predicted return < -threshold
-        - Hold otherwise
+        Signal, matching this docstring exactly: compare the forecast for
+        tomorrow against *today's spot price*,
+        ``pred_return = (predictions[i] - actuals[i]) / actuals[i]``, then
+
+        - buy when ``pred_return > threshold`` and flat
+        - sell when ``pred_return < -threshold`` and long
+        - hold otherwise
+
+        The earlier implementation differenced consecutive predictions, which
+        measures momentum in the forecast series rather than the forecast against
+        spot, so the signal did not match either the docstring or the intent.
+
+        Sizing is cost-aware: the trade is sized so that value plus commission
+        and slippage fits inside available capital. Sizing on price alone made
+        ``total_cost > capital`` at ``position_size=1.0``, so the affordability
+        guard silently rejected every trade.
 
         Args:
-            predictions: Predicted prices
-            actuals: Actual prices
-            dates: Date index
-            threshold: Threshold for trading signal (as fraction)
+            predictions: Forecast price for bar i+1, one per bar
+            actuals: Spot price at bar i, one per bar
+            dates: Date index, one per bar
+            threshold: Minimum absolute forecast return to act on
 
         Returns:
-            Dictionary with backtest results
+            Dict with equity_curve (length n+1 -- see module docstring), positions
+            (also n+1), trades, final_equity, total_return, metrics
         """
-        logger.info(f"Running simple strategy with threshold {threshold}")
+        predictions = np.asarray(predictions, dtype=float)
+        actuals = np.asarray(actuals, dtype=float)
 
-        # Initialize
-        capital = self.initial_capital
-        position = 0  # Number of shares
-        position_value = 0
+        if len(predictions) != len(actuals):
+            raise ValueError(
+                f"predictions ({len(predictions)}) and actuals ({len(actuals)}) "
+                f"must be the same length"
+            )
 
-        # Track history
+        logger.info("Running simple strategy with threshold %s", threshold)
+
+        capital = float(self.initial_capital)
+        position = 0
+
         equity_curve = [capital]
         positions = [0]
-        trades = []
+        trades: List[Dict] = []
 
-        # Calculate predicted returns
-        pred_returns = np.diff(predictions) / predictions[:-1]
-        pred_returns = np.concatenate([[0], pred_returns])
+        # Forecast versus spot, available from bar 0 onwards.
+        pred_returns = (predictions - actuals) / actuals
 
         for i in range(len(predictions)):
-            current_price = actuals[i]
-            pred_return = pred_returns[i]
+            price = actuals[i]
+            signal = pred_returns[i]
 
-            # Generate signal
-            if pred_return > threshold and position == 0:
-                # Buy signal
-                shares_to_buy = int((capital * self.position_size) / current_price)
+            if signal > threshold and position == 0:
+                # Size so that value + costs fits the capital available.
+                budget = capital * self.position_size
+                shares = int(budget / (price * (1 + self.cost_per_side)))
 
-                if shares_to_buy > 0:
-                    # Calculate costs
-                    trade_value = shares_to_buy * current_price
+                if shares > 0:
+                    trade_value = shares * price
                     commission_cost = trade_value * self.commission
                     slippage_cost = trade_value * self.slippage
-                    total_cost = trade_value + commission_cost + slippage_cost
+                    capital -= trade_value + commission_cost + slippage_cost
+                    position = shares
+                    trades.append(self._trade(dates[i], 'BUY', price, shares,
+                                              commission_cost, slippage_cost))
 
-                    if total_cost <= capital:
-                        position = shares_to_buy
-                        capital -= total_cost
-                        position_value = position * current_price
+            elif signal < -threshold and position > 0:
+                capital, position = self._liquidate(
+                    capital, position, price, dates[i], trades
+                )
 
-                        trades.append({
-                            'date': dates[i],
-                            'action': 'BUY',
-                            'price': current_price,
-                            'shares': shares_to_buy,
-                            'value': trade_value,
-                            'commission': commission_cost,
-                            'slippage': slippage_cost
-                        })
-
-            elif pred_return < -threshold and position > 0:
-                # Sell signal
-                trade_value = position * current_price
-                commission_cost = trade_value * self.commission
-                slippage_cost = trade_value * self.slippage
-                net_proceeds = trade_value - commission_cost - slippage_cost
-
-                capital += net_proceeds
-
-                trades.append({
-                    'date': dates[i],
-                    'action': 'SELL',
-                    'price': current_price,
-                    'shares': position,
-                    'value': trade_value,
-                    'commission': commission_cost,
-                    'slippage': slippage_cost
-                })
-
-                position = 0
-                position_value = 0
-
-            # Update position value
-            if position > 0:
-                position_value = position * current_price
-
-            # Calculate total equity
-            total_equity = capital + position_value
-
-            equity_curve.append(total_equity)
+            equity_curve.append(capital + position * price)
             positions.append(position)
 
-        # Calculate final metrics
-        final_equity = equity_curve[-1]
-        total_return = (final_equity - self.initial_capital) / self.initial_capital * 100
+        # Symmetric exit: liquidate any open position on the final bar.
+        if position > 0:
+            capital, position = self._liquidate(
+                capital, position, actuals[-1], dates[-1], trades
+            )
+            equity_curve[-1] = capital
+            positions[-1] = 0
 
-        # Calculate metrics
-        metrics = self._calculate_backtest_metrics(
-            equity_curve,
-            dates,
-            trades
+        equity_curve = np.array(equity_curve)
+        metrics = self._calculate_backtest_metrics(equity_curve, trades=trades)
+        final_equity = float(equity_curve[-1])
+
+        logger.info(
+            "Backtest complete: final equity $%.2f, return %.2f%%, %d trades",
+            final_equity, metrics['total_return'], len(trades)
         )
 
-        results = {
-            'equity_curve': np.array(equity_curve),
+        return {
+            'equity_curve': equity_curve,
             'positions': np.array(positions),
             'trades': trades,
             'final_equity': final_equity,
-            'total_return': total_return,
-            'metrics': metrics
+            'total_return': metrics['total_return'],
+            'metrics': metrics,
         }
-
-        logger.info(f"Backtest completed: Final equity ${final_equity:.2f}, Return {total_return:.2f}%")
-
-        return results
 
     def buy_and_hold_strategy(
         self,
@@ -170,173 +350,169 @@ class Backtester:
         dates: pd.DatetimeIndex
     ) -> Dict[str, any]:
         """
-        Buy and hold strategy for comparison
+        Buy on the first bar, liquidate on the last, for comparison.
+
+        Uses the same cost-aware sizing, the same n+1 equity-curve contract and
+        the same exit convention as ``simple_strategy``, so the two are scored
+        over an identical number of bars and both pay entry and exit costs.
 
         Args:
-            prices: Actual prices
-            dates: Date index
+            prices: Spot prices, one per bar
+            dates: Date index, one per bar
 
         Returns:
-            Dictionary with backtest results
+            Dict with equity_curve (length n+1), positions, trades, final_equity,
+            total_return, metrics
         """
+        prices = np.asarray(prices, dtype=float)
         logger.info("Running buy and hold strategy")
 
-        # Buy at first price
-        initial_price = prices[0]
-        shares = int(self.initial_capital / initial_price)
+        capital = float(self.initial_capital)
+        entry_price = prices[0]
+        shares = int((capital * self.position_size) / (entry_price * (1 + self.cost_per_side)))
 
-        # Calculate costs
-        trade_value = shares * initial_price
-        commission_cost = trade_value * self.commission
-        slippage_cost = trade_value * self.slippage
-        total_cost = trade_value + commission_cost + slippage_cost
+        trades: List[Dict] = []
+        if shares > 0:
+            trade_value = shares * entry_price
+            commission_cost = trade_value * self.commission
+            slippage_cost = trade_value * self.slippage
+            capital -= trade_value + commission_cost + slippage_cost
+            trades.append(self._trade(dates[0], 'BUY', entry_price, shares,
+                                      commission_cost, slippage_cost))
 
-        remaining_cash = self.initial_capital - total_cost
+        equity_curve = np.concatenate([[self.initial_capital], capital + shares * prices])
 
-        # Calculate equity curve (seeded with initial capital, then one point per period)
-        equity_curve = np.concatenate([[self.initial_capital], remaining_cash + shares * np.asarray(prices)])
+        # Symmetric exit on the final bar, so the last curve point is the
+        # post-liquidation value and there is only one total-return number.
+        if shares > 0:
+            capital, _ = self._liquidate(capital, shares, prices[-1], dates[-1], trades)
+            equity_curve[-1] = capital
 
-        # Final sell
-        final_price = prices[-1]
-        final_value = shares * final_price
-        final_commission = final_value * self.commission
-        final_slippage = final_value * self.slippage
-        final_equity = remaining_cash + final_value - final_commission - final_slippage
+        metrics = self._calculate_backtest_metrics(equity_curve, trades=trades)
+        final_equity = float(equity_curve[-1])
 
-        total_return = (final_equity - self.initial_capital) / self.initial_capital * 100
-
-        # Calculate metrics
-        trades = [
-            {
-                'date': dates[0],
-                'action': 'BUY',
-                'price': initial_price,
-                'shares': shares,
-                'value': trade_value,
-                'commission': commission_cost,
-                'slippage': slippage_cost
-            },
-            {
-                'date': dates[-1],
-                'action': 'SELL',
-                'price': final_price,
-                'shares': shares,
-                'value': final_value,
-                'commission': final_commission,
-                'slippage': final_slippage
-            }
-        ]
-
-        metrics = self._calculate_backtest_metrics(
-            equity_curve,
-            dates,
-            trades
+        logger.info(
+            "Buy and hold: final equity $%.2f, return %.2f%%", final_equity,
+            metrics['total_return']
         )
 
-        results = {
+        return {
             'equity_curve': equity_curve,
             'positions': np.concatenate([[0], np.full(len(prices), shares)]),
             'trades': trades,
             'final_equity': final_equity,
-            'total_return': total_return,
-            'metrics': metrics
+            'total_return': metrics['total_return'],
+            'metrics': metrics,
         }
 
-        logger.info(f"Buy and hold: Final equity ${final_equity:.2f}, Return {total_return:.2f}%")
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
 
-        return results
+    @staticmethod
+    def _trade(date, action, price, shares, commission_cost, slippage_cost) -> Dict:
+        return {
+            'date': date,
+            'action': action,
+            'price': price,
+            'shares': shares,
+            'value': shares * price,
+            'commission': commission_cost,
+            'slippage': slippage_cost,
+        }
+
+    def _liquidate(self, capital, position, price, date, trades):
+        """Sell the open position at ``price``, paying commission and slippage."""
+        trade_value = position * price
+        commission_cost = trade_value * self.commission
+        slippage_cost = trade_value * self.slippage
+        capital += trade_value - commission_cost - slippage_cost
+        trades.append(self._trade(date, 'SELL', price, position,
+                                  commission_cost, slippage_cost))
+        return capital, 0
 
     def _calculate_backtest_metrics(
         self,
         equity_curve: np.ndarray,
-        dates: pd.DatetimeIndex,
-        trades: List[Dict]
+        trades: Optional[List[Dict]] = None,
+        n_trades: Optional[int] = None
     ) -> Dict[str, float]:
         """
-        Calculate backtest performance metrics
+        Performance metrics from an n+1 equity curve.
+
+        The curve holds ``n + 1`` points for ``n`` bars, so annualisation uses
+        ``n`` periods, not ``n + 1``. Counting the seed point as a trading day
+        biased every annualised figure downward.
 
         Args:
-            equity_curve: Equity over time
-            dates: Date index
-            trades: List of trades
+            equity_curve: Length n+1, starting at initial capital
+            trades: Trade list, for win rate and profit factor
+            n_trades: Trade count when there is no trade list (return-space path)
 
         Returns:
-            Dictionary of metrics
+            Dict of metrics
         """
-        equity_curve = np.array(equity_curve)
-
-        # Returns
+        equity_curve = np.asarray(equity_curve, dtype=float)
         returns = np.diff(equity_curve) / equity_curve[:-1]
 
-        # Total return
+        n_periods = len(equity_curve) - 1
         total_return = (equity_curve[-1] - equity_curve[0]) / equity_curve[0] * 100
 
-        # Annualized return
-        n_days = len(equity_curve)
-        years = n_days / 252
-        annualized_return = ((equity_curve[-1] / equity_curve[0]) ** (1 / years) - 1) * 100 if years > 0 else 0
+        years = n_periods / TRADING_DAYS
+        annualized_return = (
+            ((equity_curve[-1] / equity_curve[0]) ** (1 / years) - 1) * 100
+            if years > 0 and equity_curve[-1] > 0 else 0.0
+        )
 
-        # Volatility (annualized)
-        volatility = np.std(returns) * np.sqrt(252) * 100
+        volatility = float(np.std(returns) * np.sqrt(TRADING_DAYS) * 100) if len(returns) else 0.0
+        excess_return = annualized_return / 100 - self.risk_free_rate
+        sharpe_ratio = excess_return / (volatility / 100) if volatility else 0.0
 
-        # Sharpe ratio (assuming 2% risk-free rate)
-        risk_free_rate = 0.02
-        excess_return = annualized_return / 100 - risk_free_rate
-        sharpe_ratio = excess_return / (volatility / 100) if volatility != 0 else 0
-
-        # Maximum drawdown
         running_max = np.maximum.accumulate(equity_curve)
         drawdown = (equity_curve - running_max) / running_max
-        max_drawdown = abs(np.min(drawdown)) * 100
+        max_drawdown = float(abs(np.min(drawdown)) * 100)
 
-        # Win rate
-        n_trades = len(trades) // 2  # Buy and sell pairs
-        if n_trades > 0:
-            buy_trades = [t for t in trades if t['action'] == 'BUY']
-            sell_trades = [t for t in trades if t['action'] == 'SELL']
+        downside = returns[returns < 0]
+        downside_vol = float(np.std(downside) * np.sqrt(TRADING_DAYS) * 100) if len(downside) else 0.0
+        sortino_ratio = excess_return / (downside_vol / 100) if downside_vol else 0.0
 
-            wins = 0
-            total_profit = 0
-            total_loss = 0
+        win_rate, profit_factor, trade_count = 0.0, 0.0, 0
+        if trades:
+            buys = [t for t in trades if t['action'] == 'BUY']
+            sells = [t for t in trades if t['action'] == 'SELL']
+            trade_count = min(len(buys), len(sells))
 
-            for buy, sell in zip(buy_trades, sell_trades):
-                profit = (sell['price'] - buy['price']) * buy['shares'] - sell['commission'] - sell['slippage']
+            wins, gross_profit, gross_loss = 0, 0.0, 0.0
+            for buy, sell in zip(buys, sells):
+                profit = (
+                    (sell['price'] - buy['price']) * buy['shares']
+                    - buy['commission'] - buy['slippage']
+                    - sell['commission'] - sell['slippage']
+                )
                 if profit > 0:
                     wins += 1
-                    total_profit += profit
+                    gross_profit += profit
                 else:
-                    total_loss += abs(profit)
+                    gross_loss += abs(profit)
 
-            win_rate = wins / n_trades * 100 if n_trades > 0 else 0
-            profit_factor = total_profit / total_loss if total_loss > 0 else 0
-        else:
-            win_rate = 0
-            profit_factor = 0
-            n_trades = 0
+            win_rate = wins / trade_count * 100 if trade_count else 0.0
+            profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        elif n_trades is not None:
+            trade_count = n_trades
 
-        # Calmar ratio
-        calmar_ratio = annualized_return / max_drawdown if max_drawdown != 0 else 0
-
-        # Sortino ratio (downside deviation)
-        downside_returns = returns[returns < 0]
-        downside_std = np.std(downside_returns) if len(downside_returns) > 0 else 0
-        downside_vol = downside_std * np.sqrt(252) * 100
-        sortino_ratio = excess_return / (downside_vol / 100) if downside_vol != 0 else 0
-
-        metrics = {
-            'total_return': total_return,
-            'annualized_return': annualized_return,
+        return {
+            'total_return': float(total_return),
+            'annualized_return': float(annualized_return),
             'volatility': volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'sortino_ratio': sortino_ratio,
+            'sharpe_ratio': float(sharpe_ratio),
+            'sortino_ratio': float(sortino_ratio),
             'max_drawdown': max_drawdown,
-            'calmar_ratio': calmar_ratio,
-            'win_rate': win_rate,
-            'profit_factor': profit_factor,
-            'n_trades': n_trades
+            'calmar_ratio': float(annualized_return / max_drawdown) if max_drawdown else 0.0,
+            'win_rate': float(win_rate),
+            'profit_factor': float(profit_factor),
+            'n_trades': int(trade_count),
+            'n_periods': int(n_periods),
         }
-
-        return metrics
 
     def compare_strategies(
         self,
@@ -344,144 +520,39 @@ class Backtester:
         buy_hold_results: Dict
     ) -> pd.DataFrame:
         """
-        Compare multiple strategies
+        Put strategies and the benchmark side by side.
+
+        Safe to compare directly: every strategy here is scored over the same
+        bars under the same entry/exit cost convention.
 
         Args:
-            strategy_results: Dictionary of {strategy_name: results}
-            buy_hold_results: Buy and hold results for comparison
+            strategy_results: {strategy_name: results}
+            buy_hold_results: Benchmark results
 
         Returns:
             Comparison DataFrame
         """
+        periods = {
+            name: res['metrics'].get('n_periods')
+            for name, res in {**strategy_results, 'Buy & Hold': buy_hold_results}.items()
+        }
+        distinct = {p for p in periods.values() if p is not None}
+        if len(distinct) > 1:
+            raise ValueError(
+                f"Strategies cover different numbers of bars and cannot be "
+                f"compared: {periods}"
+            )
+
         all_results = {
             'Buy & Hold': buy_hold_results['metrics'],
-            **{name: results['metrics'] for name, results in strategy_results.items()}
+            **{name: res['metrics'] for name, res in strategy_results.items()},
         }
-
-        df = pd.DataFrame(all_results).T
-
-        return df
-
-
-class WalkForwardBacktester:
-    """
-    Walk-forward backtesting with retraining
-    """
-
-    def __init__(
-        self,
-        train_size: int = 252,  # 1 year
-        test_size: int = 21,    # 1 month
-        retrain_frequency: int = 21,  # Retrain monthly
-        initial_capital: float = 100000,
-        commission: float = 0.001,
-        slippage: float = 0.0005
-    ):
-        """
-        Initialize walk-forward backtester
-
-        Args:
-            train_size: Training window size
-            test_size: Test window size
-            retrain_frequency: How often to retrain
-            initial_capital: Starting capital
-            commission: Commission per trade
-            slippage: Slippage per trade
-        """
-        self.train_size = train_size
-        self.test_size = test_size
-        self.retrain_frequency = retrain_frequency
-        self.backtester = Backtester(initial_capital, commission, slippage)
-
-    def run(
-        self,
-        data: pd.DataFrame,
-        model_class: type,
-        feature_cols: List[str],
-        target_col: str
-    ) -> Dict[str, any]:
-        """
-        Run walk-forward backtest
-
-        Args:
-            data: DataFrame with features and target
-            model_class: Model class to use
-            feature_cols: Feature column names
-            target_col: Target column name
-
-        Returns:
-            Backtest results
-        """
-        logger.info("Running walk-forward backtest")
-
-        predictions = []
-        actuals = []
-        dates = []
-
-        n = len(data)
-        start_idx = self.train_size
-
-        while start_idx + self.test_size <= n:
-            # Define windows
-            train_start = start_idx - self.train_size
-            train_end = start_idx
-            test_end = min(start_idx + self.test_size, n)
-
-            # Split data
-            train_data = data.iloc[train_start:train_end]
-            test_data = data.iloc[start_idx:test_end]
-
-            X_train = train_data[feature_cols]
-            y_train = train_data[target_col]
-            X_test = test_data[feature_cols]
-            y_test = test_data[target_col]
-
-            # Train model
-            model = model_class()
-            model.fit(X_train, y_train)
-
-            # Predict
-            y_pred = model.predict(X_test)
-
-            # Store results
-            predictions.extend(y_pred)
-            actuals.extend(y_test.values)
-            dates.extend(test_data.index)
-
-            # Move window
-            start_idx += self.retrain_frequency
-
-        # Run backtesting on predictions
-        predictions = np.array(predictions)
-        actuals = np.array(actuals)
-        dates = pd.DatetimeIndex(dates)
-
-        # Strategy backtest
-        strategy_results = self.backtester.simple_strategy(
-            predictions, actuals, dates
-        )
-
-        # Buy and hold backtest
-        buy_hold_results = self.backtester.buy_and_hold_strategy(
-            actuals, dates
-        )
-
-        results = {
-            'strategy': strategy_results,
-            'buy_hold': buy_hold_results,
-            'predictions': predictions,
-            'actuals': actuals,
-            'dates': dates
-        }
-
-        logger.info("Walk-forward backtest completed")
-
-        return results
+        return pd.DataFrame(all_results).T
 
 
 def print_backtest_results(results: Dict[str, any]):
     """
-    Print backtest results in a formatted way
+    Print backtest results in a readable block.
 
     Args:
         results: Backtest results dictionary
@@ -492,25 +563,28 @@ def print_backtest_results(results: Dict[str, any]):
     print("BACKTEST RESULTS")
     print("=" * 60)
 
-    print(f"\n💰 Returns:")
+    print("\nReturns:")
     print(f"  Total Return:           {metrics['total_return']:.2f}%")
     print(f"  Annualized Return:      {metrics['annualized_return']:.2f}%")
 
-    print(f"\n📊 Risk Metrics:")
+    print("\nRisk:")
     print(f"  Volatility:             {metrics['volatility']:.2f}%")
     print(f"  Maximum Drawdown:       {metrics['max_drawdown']:.2f}%")
 
-    print(f"\n📈 Risk-Adjusted Returns:")
+    print("\nRisk-Adjusted:")
     print(f"  Sharpe Ratio:           {metrics['sharpe_ratio']:.4f}")
     print(f"  Sortino Ratio:          {metrics['sortino_ratio']:.4f}")
     print(f"  Calmar Ratio:           {metrics['calmar_ratio']:.4f}")
 
-    print(f"\n🎯 Trading Statistics:")
+    print("\nTrading:")
     print(f"  Number of Trades:       {int(metrics['n_trades'])}")
-    print(f"  Win Rate:               {metrics['win_rate']:.2f}%")
-    print(f"  Profit Factor:          {metrics['profit_factor']:.4f}")
+    if 'turnover' in metrics:
+        print(f"  Turnover (position chg):{metrics['turnover']:.0f}")
+        print(f"  Time in Market:         {metrics['time_in_market']*100:.1f}%")
+    else:
+        print(f"  Win Rate:               {metrics['win_rate']:.2f}%")
+        print(f"  Profit Factor:          {metrics['profit_factor']:.4f}")
 
-    print(f"\n💵 Final Results:")
+    print("\nFinal:")
     print(f"  Final Equity:           ${results['final_equity']:,.2f}")
-
     print("=" * 60 + "\n")

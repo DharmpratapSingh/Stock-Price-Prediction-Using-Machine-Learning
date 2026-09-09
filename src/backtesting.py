@@ -193,8 +193,8 @@ class Backtester:
 
         remaining_cash = self.initial_capital - total_cost
 
-        # Calculate equity curve
-        equity_curve = remaining_cash + shares * prices
+        # Calculate equity curve (seeded with initial capital, then one point per period)
+        equity_curve = np.concatenate([[self.initial_capital], remaining_cash + shares * np.asarray(prices)])
 
         # Final sell
         final_price = prices[-1]
@@ -235,7 +235,7 @@ class Backtester:
 
         results = {
             'equity_curve': equity_curve,
-            'positions': np.full(len(prices), shares),
+            'positions': np.concatenate([[0], np.full(len(prices), shares)]),
             'trades': trades,
             'final_equity': final_equity,
             'total_return': total_return,

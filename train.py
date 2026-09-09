@@ -386,9 +386,9 @@ def main(config_path: str = "config/config.yaml", model_name: str = None):
 
     # Plot equity curves
     visualizer.plot_equity_curve(
-        dates=test_data.index[:len(strategy_results['equity_curve'])],
-        equity_curve=strategy_results['equity_curve'],
-        benchmark=buy_hold_results['equity_curve'][:len(strategy_results['equity_curve'])],
+        dates=test_data.index,
+        equity_curve=strategy_results['equity_curve'][1:],
+        benchmark=buy_hold_results['equity_curve'][1:],
         title="Backtesting Results",
         save_path=f"{config['paths']['results_dir']}/{best_model_name}_equity_curve.png"
     )

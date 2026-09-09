@@ -73,7 +73,7 @@ def test_buy_and_hold_strategy(sample_prices):
     assert 'equity_curve' in results
     assert 'final_equity' in results
     assert 'total_return' in results
-    assert len(results['equity_curve']) == len(prices)
+    assert len(results['equity_curve']) == len(prices) + 1  # +1 for initial capital
 
 
 def test_backtest_metrics(sample_predictions):

@@ -2,11 +2,16 @@
 
 # Data Configuration
 data:
-  symbol: "NVDA"
+  symbol: "NVDA"                 # Default single-ticker run
   start_date: "2018-01-01"
-  end_date: "2024-01-01"
-  test_size: 0.2
-  validation_size: 0.1
+  end_date: "2024-12-31"
+  # Extended basket for the multi-ticker results table
+  tickers: ["SPY", "AAPL", "MSFT", "NVDA", "JPM"]
+  basket_start_date: "2015-01-01"
+  # Committed CSV snapshots; the loader prefers these so runs reproduce offline
+  snapshot_dir: "data/raw"
+  allow_download: false          # Set true (or use --download) to refresh snapshots
+  horizon: 1                     # Forecast horizon in trading days
 
 # Feature Engineering
 features:
@@ -37,61 +42,36 @@ features:
 
   # Price patterns
   price_changes: [1, 5, 10, 20]
+  momentum_periods: [5, 10, 20]
+  trend_windows: [10, 20, 50]
+
+  # Restrict the model matrix to scale-free features (drop raw price/volume
+  # levels such as sma_50 or obv, which do not transfer across a 10-year range)
+  stationary_only: true
 
 # Model Configuration
+# Three families, fixed defaults. Nothing is tuned against a test fold; the exact
+# values live in src/models.py DEFAULT_PARAMS and are documented in docs/PIPELINE.md.
 models:
-  random_forest:
-    n_estimators: [100, 200, 300]
-    max_depth: [10, 20, 30, null]
-    min_samples_split: [2, 5, 10]
-    min_samples_leaf: [1, 2, 4]
-
-  xgboost:
-    n_estimators: [100, 200, 300]
-    max_depth: [3, 5, 7, 9]
-    learning_rate: [0.01, 0.05, 0.1]
-    subsample: [0.8, 0.9, 1.0]
-    colsample_bytree: [0.8, 0.9, 1.0]
-
-  lightgbm:
-    n_estimators: [100, 200, 300]
-    max_depth: [3, 5, 7, 9]
-    learning_rate: [0.01, 0.05, 0.1]
-    num_leaves: [31, 50, 70]
-
-  lstm:
-    sequence_length: 60
-    lstm_units: [50, 100]
-    dropout: [0.2, 0.3]
-    epochs: 100
-    batch_size: 32
-    learning_rate: 0.001
-
-# Hyperparameter Tuning
-tuning:
-  method: "random_search"  # random_search or grid_search
-  cv_folds: 5
-  n_iter: 20
-  scoring: "neg_mean_squared_error"
+  families: ["linear", "forest", "boosting"]
 
 # Backtesting
 backtesting:
   initial_capital: 100000
-  commission: 0.001  # 0.1%
-  slippage: 0.0005   # 0.05%
-  walk_forward_splits: 5
+  commission: 0.001    # 10 bps per side
+  slippage: 0.0005     # 5 bps per side
+  threshold: 0.0       # Minimum forecast log return required to hold the position
+  cost_grid_bps: [0, 5, 10, 20]  # Per-side cost sensitivity sweep
 
 # Evaluation Metrics
 evaluation:
   metrics:
-    - "mse"
     - "rmse"
-    - "mae"
-    - "mape"
     - "r2"
     - "directional_accuracy"
     - "sharpe_ratio"
     - "max_drawdown"
+  confidence: 0.95
 
 # Paths
 paths:
@@ -112,29 +92,24 @@ visualization:
   dpi: 100
 
 # Feature Selection
+# Selection runs INSIDE the fitted pipeline, on the training window only.
 feature_selection:
   enabled: true
-  method: "correlation"  # correlation, importance, mutual_info, rfe, model_based
-  top_k: 50  # Number of features to select (if applicable)
-  correlation_threshold: 0.95  # For correlation method
-
-# Caching
-cache:
-  enabled: true
-  cache_dir: "cache"
-  ttl_days: 1  # Time to live in days
-
-# Ensemble
-ensemble:
-  enabled: false  # Set to true to use ensemble instead of single best model
-  method: "average"  # average, weighted, stacking
-  models: ["random_forest", "xgboost", "lightgbm"]
+  top_k: 40           # SelectKBest univariate F-score
+  winsorize: true     # Clip features to training-window quantiles
 
 # Training Options
+# Walk-forward is the only validation path. Folds run forward in time with an
+# embargo; nothing is ever shuffled.
 training:
-  use_hyperparameter_tuning: true  # Enable hyperparameter tuning
-  use_walk_forward: false  # Use walk-forward validation (more realistic but slower)
-  use_feature_selection: true  # Use feature selection
+  initial_train: 504   # ~2 years of trading days in the first training window
+  test_size: 63        # ~1 quarter per test fold
+  step_size: 63        # Advance one quarter per fold
+  expanding: true      # Expanding window; false gives a rolling window
+  # Embargo between train end and test start. "auto" uses the feature warm-up
+  # length (the deepest rolling lookback), so no test feature row is computed
+  # from a row used in training.
+  embargo: "auto"
 
 # Random seed for reproducibility
 random_seed: 42

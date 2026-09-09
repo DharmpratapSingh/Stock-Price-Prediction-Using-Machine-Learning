@@ -1,6 +1,16 @@
 """
-Feature selection module for stock price prediction
-Handles correlation analysis, feature importance, and feature selection
+Feature ranking and correlation analysis.
+
+IMPORTANT -- scope. The functions here are *reporting* tools. They take a
+DataFrame and rank its columns, which means whatever window you hand them is the
+window they learn from. Calling them on a full dataset before splitting is how
+the original pipeline leaked the test period into the choice of which features
+survived.
+
+Selection that feeds a model goes through ``SelectKBest`` inside the pipeline
+built by ``src.models.build_pipeline``, so it is refitted on each training window.
+train.py uses ``analyze_feature_correlation`` only on the first fold's training
+rows, and says so in the emitted table.
 """
 
 import pandas as pd

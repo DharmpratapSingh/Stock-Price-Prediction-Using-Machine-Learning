@@ -133,7 +133,7 @@ def test_fit_predict_handles_an_empty_set_of_eval_sets(train_data):
     assert result == {name: {} for name in MODEL_NAMES}
 
 
-def test_fit_predict_is_deterministic_and_does_not_refit_on_the_eval_set(train_data):
+def test_fit_predict_is_deterministic(train_data):
     """Two identical calls agree, so nothing in the eval set changed the fit."""
     X_train, y_train = train_data
     # A deliberately different distribution: if the models were refit on it the
@@ -144,9 +144,9 @@ def test_fit_predict_is_deterministic_and_does_not_refit_on_the_eval_set(train_d
     second = fit_predict(make_models(PARAMS), X_train, y_train, {"shifted": X_shifted})
 
     for name in MODEL_NAMES:
-        # Not bit-exact: the parallel forest/booster reductions sum in a
-        # non-deterministic order. Anything above float noise would mean the
-        # fit itself moved.
+        # The seeded forest is bit-reproducible; the tolerance is prudence
+        # about xgboost's threaded reductions. Anything above float noise
+        # would mean the fit itself moved.
         np.testing.assert_allclose(
             first[name]["shifted"], second[name]["shifted"], rtol=1e-9, atol=1e-15
         )

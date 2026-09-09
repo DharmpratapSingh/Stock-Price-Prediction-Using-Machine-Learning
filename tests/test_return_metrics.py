@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from src.return_metrics import (
+    METRIC_NAMES,
     directional_accuracy,
     evaluate,
     information_coefficient,
@@ -50,7 +51,7 @@ def test_rmse_returns_a_python_float(returns):
 
 
 def test_directional_accuracy_same_signs_is_one(returns):
-    assert directional_accuracy(returns, np.abs(returns) * np.sign(returns)) == 1.0
+    assert directional_accuracy(returns, 0.5 * returns) == 1.0
 
 
 def test_directional_accuracy_flipped_signs_is_zero(returns):
@@ -119,7 +120,7 @@ def test_r2_of_perfect_prediction_is_one(returns):
 
 def test_evaluate_returns_exactly_the_expected_keys(returns):
     result = evaluate(returns, np.zeros_like(returns))
-    assert set(result) == {"rmse", "directional_accuracy", "ic", "r2", "n"}
+    assert set(result) == set(METRIC_NAMES)
 
 
 def test_evaluate_reports_the_sample_size(returns):
@@ -149,9 +150,47 @@ def test_evaluate_accepts_python_lists():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "metric", [rmse, directional_accuracy, information_coefficient, r2, evaluate]
-)
+METRICS = [rmse, directional_accuracy, information_coefficient, r2, evaluate]
+
+
+@pytest.mark.parametrize("metric", METRICS)
 def test_mismatched_lengths_raise_value_error(metric):
     with pytest.raises(ValueError):
         metric(np.zeros(5), np.zeros(4))
+
+
+@pytest.mark.parametrize("metric", METRICS)
+def test_empty_input_raises_value_error(metric):
+    with pytest.raises(ValueError):
+        metric(np.zeros(0), np.zeros(0))
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_prediction_raises_value_error(metric, bad):
+    """A NaN prediction is a bug upstream, not a silently mis-scored down day."""
+    y_true = np.array([0.01, -0.02, 0.03, -0.04])
+    y_pred = np.array([0.01, bad, 0.03, -0.04])
+    with pytest.raises(ValueError):
+        metric(y_true, y_pred)
+
+
+@pytest.mark.parametrize("metric", METRICS)
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_truth_raises_value_error(metric, bad):
+    y_true = np.array([0.01, bad, 0.03, -0.04])
+    y_pred = np.array([0.01, -0.02, 0.03, -0.04])
+    with pytest.raises(ValueError):
+        metric(y_true, y_pred)
+
+
+@pytest.mark.parametrize("metric", METRICS)
+def test_column_vectors_are_accepted(metric, returns):
+    """sklearn hands back (n, 1) often enough that flattening one is kind."""
+    metric(returns.reshape(-1, 1), np.zeros((returns.size, 1)))
+
+
+@pytest.mark.parametrize("metric", METRICS)
+def test_wide_two_dimensional_input_raises_value_error(metric):
+    with pytest.raises(ValueError):
+        metric(np.zeros((4, 2)), np.zeros((4, 2)))

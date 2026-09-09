@@ -18,10 +18,34 @@ from sklearn.metrics import r2_score
 METRIC_NAMES = ["rmse", "directional_accuracy", "ic", "r2", "n"]
 
 
+def _as_1d(name: str, values) -> np.ndarray:
+    """Coerce one input to a finite 1-D float array."""
+    array = np.asarray(values, dtype=float)
+
+    # A column vector is the common shape accident (sklearn, a DataFrame slice)
+    # and means the same thing; any other 2-D shape is a real mistake.
+    if array.ndim == 2 and array.shape[1] == 1:
+        array = array.ravel()
+    if array.ndim != 1:
+        raise ValueError(
+            f"{name} must be 1-D (or a single-column 2-D array), got shape "
+            f"{np.shape(values)}."
+        )
+
+    # NaNs must not reach the metrics: directional_accuracy would quietly score
+    # a NaN prediction as a "down" call while r2_score blows up inside sklearn.
+    # A non-finite prediction is a bug upstream, so say so here.
+    if not np.all(np.isfinite(array)):
+        bad = int(np.count_nonzero(~np.isfinite(array)))
+        raise ValueError(f"{name} contains {bad} non-finite value(s) (NaN or inf).")
+
+    return array
+
+
 def _as_pair(y_true, y_pred) -> tuple[np.ndarray, np.ndarray]:
-    """Coerce both inputs to 1-D float arrays of the same non-zero length."""
-    true = np.asarray(y_true, dtype=float).ravel()
-    pred = np.asarray(y_pred, dtype=float).ravel()
+    """Coerce both inputs to finite 1-D float arrays of the same length."""
+    true = _as_1d("y_true", y_true)
+    pred = _as_1d("y_pred", y_pred)
 
     if true.size != pred.size:
         raise ValueError(
@@ -81,7 +105,7 @@ def r2(y_true, y_pred) -> float:
     return float(r2_score(true, pred))
 
 
-def evaluate(y_true, y_pred) -> dict[str, float]:
+def evaluate(y_true, y_pred) -> dict[str, float | int]:
     """All return metrics for one prediction, keyed by :data:`METRIC_NAMES`."""
     true, pred = _as_pair(y_true, y_pred)
     return {

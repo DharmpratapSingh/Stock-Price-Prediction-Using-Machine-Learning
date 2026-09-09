@@ -5,6 +5,9 @@ Deliberately boring. There is no hyperparameter search and no feature
 selection here -- both would need the evaluation years to choose anything, and
 that is exactly the leak this pipeline exists to avoid. Every model is fitted
 on the training split alone and then only ever asked to predict.
+
+The one thing the factory adds on its own is ``n_jobs=-1`` for the random
+forest, and only when the config does not set it.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.base import BaseEstimator
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
@@ -20,7 +24,7 @@ from sklearn.preprocessing import StandardScaler
 MODEL_NAMES = ["ridge", "random_forest", "xgboost"]
 
 
-def make_models(params: dict) -> dict[str, object]:
+def make_models(params: dict) -> dict[str, BaseEstimator]:
     """Construct the three regressors from a config block.
 
     Args:
@@ -63,6 +67,9 @@ def fit_predict(
     X_eval_sets: dict[str, pd.DataFrame],
 ) -> dict[str, dict[str, np.ndarray]]:
     """Fit every model on the training split, then predict each evaluation set.
+
+    The estimators in ``models`` are fitted in place, so the caller's objects
+    carry the trained state afterwards.
 
     Args:
         models: Estimators keyed by name, as returned by :func:`make_models`.

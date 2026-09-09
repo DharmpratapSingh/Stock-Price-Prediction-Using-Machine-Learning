@@ -10,6 +10,7 @@ import pytest
 
 from src.baselines import (
     BASELINE_NAMES,
+    TINY,
     always_long,
     baseline_predictions,
     majority_direction,
@@ -69,7 +70,7 @@ def test_train_mean_accepts_a_python_list():
 def test_always_long_is_tiny_and_positive():
     prediction = always_long(4)
     assert np.all(prediction > 0)
-    assert np.allclose(prediction, 1e-6)
+    assert np.allclose(prediction, TINY)
 
 
 def test_always_long_directional_accuracy_is_the_up_day_fraction():
@@ -88,17 +89,17 @@ def test_always_long_directional_accuracy_is_the_up_day_fraction():
 
 def test_majority_direction_goes_long_when_training_majority_is_up():
     up_heavy = np.array([0.01, 0.02, 0.03, -0.01])
-    assert np.all(majority_direction(up_heavy, 3) == 1e-6)
+    assert np.all(majority_direction(up_heavy, 3) == TINY)
 
 
 def test_majority_direction_goes_short_when_training_majority_is_down():
     down_heavy = np.array([-0.01, -0.02, -0.03, 0.01])
-    assert np.all(majority_direction(down_heavy, 3) == -1e-6)
+    assert np.all(majority_direction(down_heavy, 3) == -TINY)
 
 
 def test_majority_direction_breaks_a_tie_long():
     tied = np.array([0.01, -0.01])
-    assert np.all(majority_direction(tied, 2) == 1e-6)
+    assert np.all(majority_direction(tied, 2) == TINY)
 
 
 # --------------------------------------------------------------------------
@@ -124,3 +125,30 @@ def test_baseline_predictions_match_the_individual_functions(y_train):
     assert np.array_equal(
         predictions["majority_direction"], majority_direction(y_train, 8)
     )
+
+
+# --------------------------------------------------------------------------
+# training-data validation
+# --------------------------------------------------------------------------
+
+TRAINED_BASELINES = [train_mean, majority_direction]
+
+
+@pytest.mark.parametrize("baseline", TRAINED_BASELINES)
+def test_empty_training_data_raises_value_error(baseline):
+    """An empty history is no information, not a confident short."""
+    with pytest.raises(ValueError):
+        baseline(np.array([]), 5)
+
+
+@pytest.mark.parametrize("baseline", TRAINED_BASELINES)
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_non_finite_training_data_raises_value_error(baseline, bad):
+    with pytest.raises(ValueError):
+        baseline(np.array([0.01, bad, -0.02]), 5)
+
+
+@pytest.mark.parametrize("bad_train", [np.array([]), np.array([0.01, np.nan])])
+def test_baseline_predictions_rejects_bad_training_data(bad_train):
+    with pytest.raises(ValueError):
+        baseline_predictions(bad_train, 5)

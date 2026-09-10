@@ -7,7 +7,7 @@ Leakage-free walk-forward-by-calendar experiment: models are fitted on the train
 - Symbol: `NVDA`
 - Download range: `2017-10-01` to `2025-01-01` (end exclusive; the early months are feature warmup)
 - Split boundaries: train through `2022-12-31`, validation `2023`, test `2024`
-- Run timestamp (UTC): 2026-09-10T00:19:55Z
+- Run timestamp (UTC): 2026-09-10T02:18:50Z
 - Cost assumption: 0.00075 per side (0.15% round trip)
 - Threshold grid: 0, 0.0005, 0.001, 0.002, 0.005
 - Minimum days in market: 20
@@ -23,8 +23,8 @@ Leakage-free walk-forward-by-calendar experiment: models are fitted on the train
 
 | split | rows | first_date | last_date |
 | --- | --- | --- | --- |
-| train | 1259 | 2018-01-02 | 2022-12-30 |
-| val | 250 | 2023-01-03 | 2023-12-29 |
+| train | 1258 | 2018-01-02 | 2022-12-29 |
+| val | 249 | 2023-01-03 | 2023-12-28 |
 | test | 251 | 2024-01-02 | 2024-12-30 |
 
 ### Features (16)
@@ -41,9 +41,9 @@ Target: `target`, the next-day simple return.
 | train_mean | 0.03317 | 55.8% | n/a | -0.010 |
 | always_long | 0.03334 | 55.8% | n/a | -0.020 |
 | majority_direction | 0.03334 | 55.8% | n/a | -0.020 |
-| ridge | 0.03309 | 50.6% | 0.072 | -0.004 |
-| random_forest | 0.03291 | 53.8% | 0.091 | +0.006 |
-| xgboost | 0.03355 | 52.6% | -0.019 | -0.033 |
+| ridge | 0.03309 | 50.2% | 0.069 | -0.004 |
+| random_forest | 0.03294 | 53.8% | 0.084 | +0.005 |
+| xgboost | 0.03356 | 51.4% | -0.021 | -0.033 |
 
 Baselines come first on purpose: a model that cannot beat `zero_return` on RMSE or `always_long` on directional accuracy has not learned anything about tomorrow.
 
@@ -51,25 +51,25 @@ Baselines come first on purpose: a model that cannot beat `zero_return` on RMSE 
 
 | name | rmse | directional_accuracy | ic | r2 |
 | --- | --- | --- | --- | --- |
-| zero_return | 0.03093 | 43.2% | n/a | -0.030 |
-| train_mean | 0.03072 | 56.8% | n/a | -0.017 |
-| always_long | 0.03093 | 56.8% | n/a | -0.030 |
-| majority_direction | 0.03093 | 56.8% | n/a | -0.030 |
-| ridge | 0.03152 | 46.8% | -0.118 | -0.070 |
-| random_forest | 0.03086 | 53.2% | -0.069 | -0.025 |
-| xgboost | 0.03130 | 54.0% | -0.056 | -0.055 |
+| zero_return | 0.03095 | 43.0% | n/a | -0.032 |
+| train_mean | 0.03073 | 57.0% | n/a | -0.018 |
+| always_long | 0.03095 | 57.0% | n/a | -0.032 |
+| majority_direction | 0.03095 | 57.0% | n/a | -0.032 |
+| ridge | 0.03153 | 47.4% | -0.115 | -0.071 |
+| random_forest | 0.03088 | 53.4% | -0.084 | -0.027 |
+| xgboost | 0.03135 | 51.0% | -0.067 | -0.059 |
 
 ## Test-set backtest (2024, after costs)
 
 | strategy | gross_return | net_return | cost_drag | total_cost | sharpe | max_drawdown | n_trades | n_round_trips | days_in_market |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | buy_and_hold | 178.9% | 178.4% | 0.4% | 0.1% | 2.22 | -27.0% | 2 | 1 | 100.0% |
-| ridge@0 (chosen) | 154.8% | 133.9% | 20.9% | 8.6% | 2.20 | -13.3% | 114 | 57 | 61.4% |
-| ridge@0 | 154.8% | 133.9% | 20.9% | 8.6% | 2.20 | -13.3% | 114 | 57 | 61.4% |
-| random_forest@0 (chosen) | 132.7% | 123.5% | 9.2% | 4.0% | 2.01 | -22.8% | 54 | 27 | 72.5% |
-| random_forest@0 | 132.7% | 123.5% | 9.2% | 4.0% | 2.01 | -22.8% | 54 | 27 | 72.5% |
-| xgboost@0.0005 | 54.8% | 46.3% | 8.6% | 5.7% | 1.15 | -33.1% | 76 | 38 | 60.6% |
-| xgboost@0 | 64.5% | 55.4% | 9.1% | 5.7% | 1.28 | -31.4% | 76 | 38 | 63.3% |
+| ridge@0 (chosen) | 150.6% | 130.1% | 20.5% | 8.6% | 2.16 | -14.7% | 114 | 57 | 61.8% |
+| ridge@0 | 150.6% | 130.1% | 20.5% | 8.6% | 2.16 | -14.7% | 114 | 57 | 61.8% |
+| random_forest@0 (chosen) | 133.6% | 123.6% | 9.9% | 4.4% | 2.01 | -22.8% | 58 | 29 | 71.7% |
+| random_forest@0 | 133.6% | 123.6% | 9.9% | 4.4% | 2.01 | -22.8% | 58 | 29 | 71.7% |
+| xgboost@0.0005 | 64.2% | 54.5% | 9.8% | 6.2% | 1.28 | -21.7% | 82 | 41 | 59.4% |
+| xgboost@0 | 71.9% | 62.9% | 9.0% | 5.4% | 1.41 | -23.4% | 72 | 36 | 62.9% |
 
 `buy_and_hold` is the benchmark to beat. Each model appears twice: at the threshold chosen on the validation year, and at 0.0 (long whenever the forecast is positive). `days_in_market` is the fraction of test days holding the position.
 
@@ -81,9 +81,9 @@ That is the bill for trading in and out every day, before a single model is fitt
 
 | model | threshold | n_round_trips | round_trips_per_year | implied_annual_cost_drag | test_cost_drag |
 | --- | --- | --- | --- | --- | --- |
-| ridge | 0.0000 | 57 | 57.2 | 8.6% | 20.9% |
-| random_forest | 0.0000 | 27 | 27.1 | 4.1% | 9.2% |
-| xgboost | 0.0005 | 38 | 38.2 | 5.7% | 8.6% |
+| ridge | 0.0000 | 57 | 57.2 | 8.6% | 20.5% |
+| random_forest | 0.0000 | 29 | 29.1 | 4.4% | 9.9% |
+| xgboost | 0.0005 | 41 | 41.2 | 6.2% | 9.8% |
 
 `round_trips_per_year` annualizes the test-year round trips (251 trading days at 252 days/year); `implied_annual_cost_drag` is that rate times the round-trip cost. `test_cost_drag` is what the backtest actually charged over the test year.
 
@@ -91,35 +91,37 @@ That is the bill for trading in and out every day, before a single model is fitt
 
 The threshold is chosen here and nowhere else. `eligible` marks the rules that were in the market at least 20 days -- an ineligible rule is still scored, it just cannot win.
 
+In this run the participation guard changed nothing: it marks the 0.005-threshold rows ineligible, but the best-Sharpe row for every model was already eligible, so no selected threshold depended on the guard. It is there to stop a rule that trades a handful of days from winning on a Sharpe computed off almost no exposure.
+
 ### ridge (chosen: 0)
 
 | row | threshold | gross_return | net_return | sharpe | max_drawdown | n_trades | days_in_market | eligible |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0.0000 | 40.7% | 31.0% | 0.89 | -17.8% | 96 | 55.6% | yes |
-| 1 | 0.0005 | 20.4% | 11.7% | 0.47 | -18.7% | 100 | 50.4% | yes |
-| 2 | 0.0010 | 12.9% | 4.8% | 0.30 | -24.1% | 100 | 42.0% | yes |
-| 3 | 0.0020 | 12.0% | 4.5% | 0.29 | -19.3% | 92 | 32.0% | yes |
-| 4 | 0.0050 | -3.4% | -4.2% | -0.54 | -10.1% | 12 | 2.4% | no |
+| 0 | 0.0000 | 45.8% | 35.5% | 0.99 | -17.6% | 98 | 56.6% | yes |
+| 1 | 0.0005 | 27.2% | 18.0% | 0.62 | -18.7% | 100 | 51.0% | yes |
+| 2 | 0.0010 | 12.9% | 4.6% | 0.29 | -22.6% | 102 | 43.4% | yes |
+| 3 | 0.0020 | 10.1% | 2.6% | 0.23 | -18.2% | 94 | 32.5% | yes |
+| 4 | 0.0050 | -4.1% | -5.2% | -0.68 | -11.0% | 16 | 3.2% | no |
 
 ### random_forest (chosen: 0)
 
 | row | threshold | gross_return | net_return | sharpe | max_drawdown | n_trades | days_in_market | eligible |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0.0000 | 155.3% | 148.5% | 2.29 | -19.7% | 36 | 78.8% | yes |
-| 1 | 0.0005 | 114.7% | 108.0% | 1.91 | -21.0% | 42 | 71.6% | yes |
-| 2 | 0.0010 | 101.3% | 94.2% | 1.80 | -20.5% | 48 | 66.8% | yes |
-| 3 | 0.0020 | 32.5% | 25.7% | 1.01 | -17.6% | 70 | 46.4% | yes |
+| 0 | 0.0000 | 166.6% | 159.0% | 2.40 | -19.7% | 38 | 77.9% | yes |
+| 1 | 0.0005 | 97.7% | 91.9% | 1.75 | -19.7% | 40 | 71.9% | yes |
+| 2 | 0.0010 | 106.6% | 99.6% | 1.88 | -21.0% | 46 | 67.5% | yes |
+| 3 | 0.0020 | 42.2% | 35.3% | 1.30 | -18.0% | 66 | 47.0% | yes |
 | 4 | 0.0050 | 2.0% | 1.8% | 0.96 | -0.1% | 2 | 0.4% | no |
 
 ### xgboost (chosen: 0.0005)
 
 | row | threshold | gross_return | net_return | sharpe | max_drawdown | n_trades | days_in_market | eligible |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | 0.0000 | 77.3% | 69.5% | 1.80 | -26.4% | 60 | 69.2% | yes |
-| 1 | 0.0005 | 77.4% | 67.9% | 1.83 | -24.5% | 74 | 63.6% | yes |
-| 2 | 0.0010 | 60.2% | 51.6% | 1.60 | -21.0% | 74 | 56.0% | yes |
-| 3 | 0.0020 | 15.0% | 8.6% | 0.46 | -21.9% | 76 | 42.0% | yes |
-| 4 | 0.0050 | 8.9% | 6.4% | 0.62 | -7.6% | 32 | 6.8% | no |
+| 0 | 0.0000 | 131.9% | 123.4% | 2.10 | -21.5% | 50 | 67.5% | yes |
+| 1 | 0.0005 | 136.4% | 126.1% | 2.16 | -21.5% | 60 | 63.1% | yes |
+| 2 | 0.0010 | 61.1% | 53.3% | 1.62 | -22.1% | 66 | 55.4% | yes |
+| 3 | 0.0020 | 17.6% | 10.4% | 0.53 | -26.6% | 84 | 42.2% | yes |
+| 4 | 0.0050 | 18.3% | 16.3% | 1.40 | -4.4% | 22 | 5.2% | no |
 
 ## Leakage guard
 

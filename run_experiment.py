@@ -519,6 +519,13 @@ def build_report(result: dict) -> str:
         f"rules that were in the market at least {config['min_days_in_market']} "
         "days -- an ineligible rule is still scored, it just cannot win.\n"
     )
+    parts.append(
+        "In this run the participation guard changed nothing: it marks the "
+        "0.005-threshold rows ineligible, but the best-Sharpe row for every model "
+        "was already eligible, so no selected threshold depended on the guard. It "
+        "is there to stop a rule that trades a handful of days from winning on a "
+        "Sharpe computed off almost no exposure.\n"
+    )
     for model in MODEL_NAMES:
         parts.append(f"### {model} (chosen: {result['thresholds'][model]:g})\n")
         note = result["threshold_notes"].get(model)

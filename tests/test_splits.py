@@ -35,6 +35,45 @@ def test_split_is_chronological_and_disjoint(frame):
     assert not val_set & test_set
 
 
+def test_next_day_target_never_reaches_into_the_following_split(frame):
+    """
+    The one-bar embargo: no row's target may be taken from the next split.
+
+    The target is ``Close[t+1] / Close[t] - 1``, so the row immediately before a
+    boundary resolves using the first close of the following split. Without the
+    embargo, training on the last 2022 bar would consume the first 2023 close and
+    threshold selection on the last 2023 bar would consume the first 2024 close.
+    The comparison is on the *target* date -- one bar after each row -- not on the
+    row's own date.
+    """
+    train, val, test = split_by_year(frame)
+    positions = {ts: i for i, ts in enumerate(frame.index)}
+
+    def target_date(split):
+        return frame.index[positions[split.index.max()] + 1]
+
+    assert target_date(train) < val.index.min(), (
+        "last training row's target lands inside validation"
+    )
+    assert target_date(val) < test.index.min(), (
+        "last validation row's target lands inside test"
+    )
+
+
+def test_embargo_drops_exactly_one_bar_per_boundary(frame):
+    """The embargo costs one row of train and one of validation, and no more."""
+    train, val, test = split_by_year(frame)
+    index = frame.index
+
+    full_train = index[index <= pd.Timestamp("2022-12-31")]
+    full_val = index[index.year == 2023]
+    full_test = index[index.year == 2024]
+
+    assert len(train) == len(full_train) - 1
+    assert len(val) == len(full_val) - 1
+    assert len(test) == len(full_test)  # the test split keeps every row
+
+
 def test_rows_outside_the_windows_are_excluded(frame):
     train, val, test = split_by_year(frame)
     kept = set(train.index) | set(val.index) | set(test.index)
@@ -51,7 +90,10 @@ def test_custom_windows(frame):
     train, val, test = split_by_year(
         frame, train_end="2021-12-31", val_year=2022, test_year=2023
     )
-    assert train.index.max() == pd.Timestamp("2021-12-31")
+    # train_end is the last date *considered*; the one-bar embargo then drops it,
+    # so training ends on the preceding bar and its target stops at train_end.
+    assert train.index.max() < pd.Timestamp("2021-12-31")
+    assert train.index.max() == frame.index[frame.index <= pd.Timestamp("2021-12-31")][-2]
     assert (val.index.year == 2022).all()
     assert (test.index.year == 2023).all()
 

@@ -20,7 +20,9 @@ scipy>=1.11            # Wilson intervals, binomial and McNemar tests
 joblib>=1.3
 PyYAML>=6.0
 
-# Figures written by train.py under results/pipeline/
+# Figures written by train.py under results/pipeline/. Required, not optional:
+# train.py/predict.py are a live code path, and the seaborn-based visualize.py
+# they used to share has been removed.
 matplotlib>=3.7
 
 # Price downloads. run_experiment.py reads data/NVDA_adjusted.csv and train.py

@@ -4,6 +4,13 @@ Chronological train / validation / test splitting.
 Random splits leak the future into the past on time series, so the split is
 fixed by calendar: everything up to ``train_end`` trains, one whole year
 validates, and the following year is the untouched test set.
+
+A calendar boundary is not by itself enough. The target is the *next* day's
+return, so the last row on each side of a boundary carries a target computed from
+the first close of the following split: training on 2022-12-30 would use the
+2023-01-03 close, the first validation day. ``split_by_year`` therefore drops the
+final row of train and of validation, which is a one-bar embargo at each
+boundary and the smallest gap that makes the splits genuinely disjoint.
 """
 
 from __future__ import annotations
@@ -20,11 +27,14 @@ def split_by_year(
     """Split a date-indexed frame into train, validation and test slices.
 
     Rows outside the three windows (early warmup years, or years after the test
-    year) are simply excluded.
+    year) are simply excluded. The final row of train and of validation is dropped
+    so that neither carries a next-day target taken from the following split --
+    see the module docstring.
 
     Args:
         df: Frame with a ``DatetimeIndex``.
-        train_end: Last date included in training (inclusive).
+        train_end: Last date considered for training (inclusive, before the
+            one-bar embargo is applied).
         val_year: Calendar year used for validation.
         test_year: Calendar year used for the final test.
 
@@ -59,6 +69,12 @@ def split_by_year(
     train = df.loc[index <= train_end_ts]
     val = df.loc[index.year == val_year]
     test = df.loc[index.year == test_year]
+
+    # One-bar embargo at each boundary: the dropped row's target is the return
+    # into the first day of the next split, so keeping it would put a validation
+    # close into training and a test close into threshold selection.
+    train = train.iloc[:-1]
+    val = val.iloc[:-1]
 
     empty = [
         name

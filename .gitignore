@@ -42,17 +42,19 @@ venv.bak/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Data
-data/
+# Data (keep the lean experiment's adjusted price cache)
+data/*
 !data/.gitkeep
+!data/NVDA_adjusted.csv
 
 # Models
 models/
 !models/.gitkeep
 
-# Results
-results/
+# Results (keep the lean experiment's committed tables)
+results/*
 !results/.gitkeep
+!results/*.csv
 
 # Logs
 logs/

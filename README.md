@@ -64,8 +64,8 @@ python run_experiment.py
 ```
 
 Config for this experiment lives under `experiment:` in `config/config.yaml`.
-Re-download prices with `--refresh`. Older `train.py` / notebook paths are still
-in the tree; they are not the experiment this README reports.
+Re-download prices with `--refresh`. The original notebook and PDF are under
+`legacy/`; they are not the experiment this README reports.
 
 ## Limitations
 

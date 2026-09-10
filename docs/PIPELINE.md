@@ -15,7 +15,7 @@ beats a coin flip but *not* the always-up baseline (53.8%), because equities dri
 upward. Net of 15 bps per side, **1 of 15** ticker×model backtests beat
 buy-and-hold, and that one is not statistically significant.
 
-Every number below comes from a committed file under [`results/`](../results).
+Every number below comes from a committed file under [`results/pipeline/`](../results/pipeline).
 
 ---
 
@@ -24,7 +24,7 @@ Every number below comes from a committed file under [`results/`](../results).
 ### 1.1 Return regression — pooled across all five tickers
 
 Out-of-sample log returns, 7,875 days, 25 walk-forward folds per ticker.
-Full per-ticker breakdown: [`results/return_regression.md`](../results/return_regression.md).
+Full per-ticker breakdown: [`results/return_regression.md`](../results/pipeline/return_regression.md).
 
 | Model | RMSE | R² | R² vs zero-forecast |
 |---|---|---|---|
@@ -47,7 +47,7 @@ study. The persistence baseline runs far lower still, reaching -1.35 (MSFT).
 
 ### 1.2 Direction — pooled
 
-Full table incl. per-ticker: [`results/direction.md`](../results/direction.md).
+Full table incl. per-ticker: [`results/direction.md`](../results/pipeline/direction.md).
 `p vs 0.5` is a binomial test against a coin flip. `p vs base` is **McNemar's exact
 test** against the always-up baseline — paired, because both predictors are scored
 on the same rows; an unpaired test against the baseline's *rate* would ignore that
@@ -60,7 +60,7 @@ of **0.405**, giving a design effect of 1 + (m−1)ρ = **2.62** and an effectiv
 **3,004**; the realised log returns correlate even more strongly (ρ = 0.624, deff =
 3.50). Each model's interval below is widened by the design effect of *its own*
 correctness indicator, which is the quantity being averaged — computed in
-[`results/pooled_dependence.md`](../results/pooled_dependence.md).
+[`results/pipeline/pooled_dependence.md`](../results/pipeline/pooled_dependence.md).
 
 | Model | Accuracy | iid 95% CI | deff | eff. n | **adjusted 95% CI** | adj. p vs 0.5 | McNemar p vs base (nominal → clustered) |
 |---|---|---|---|---|---|---|---|
@@ -99,7 +99,7 @@ combinations, at p = 0.26, is what noise looks like.
 Long/flat, one position per day, sized at full capital, net of 10 bps commission +
 5 bps slippage **per side**, charged on entry, on every position change, and on the
 final liquidation. Mean across the five tickers; per-ticker rows in
-[`results/backtest.md`](../results/backtest.md). `Sharpe` is (CAGR − rf) / annualised
+[`results/backtest.md`](../results/pipeline/backtest.md). `Sharpe` is (CAGR − rf) / annualised
 volatility with rf = 0; the textbook arithmetic Sharpe is shown beside it (see §3).
 
 | Strategy | Total return | Annualised | Sharpe | Sharpe (arith.) | Max drawdown | Turnover | Time in market |
@@ -130,9 +130,9 @@ forecast accuracy.
 ### 1.4 Cost sensitivity
 
 Mean excess return versus buy-and-hold, per-side cost swept from 0 to 20 bps.
-Full grid: [`results/cost_sensitivity.md`](../results/cost_sensitivity.md); the
+Full grid: [`results/cost_sensitivity.md`](../results/pipeline/cost_sensitivity.md); the
 15 bps row is the headline configuration and comes from
-[`results/backtest.md`](../results/backtest.md).
+[`results/backtest.md`](../results/pipeline/backtest.md).
 
 | Per-side cost | Random Forest | Ridge | XGBoost | Runs beating buy-and-hold |
 |---|---|---|---|---|
@@ -153,8 +153,8 @@ quoted without a cost sweep is not a result.
 ## 2. Why not R² on prices
 
 The same models, the same folds, scored two ways. Full table:
-[`results/level_r2_trap.md`](../results/level_r2_trap.md); figure:
-[`results/level_r2_trap.png`](../results/level_r2_trap.png).
+[`results/level_r2_trap.md`](../results/pipeline/level_r2_trap.md); figure:
+[`results/level_r2_trap.png`](../results/pipeline/level_r2_trap.png).
 
 | Ticker | Persistence: ŷ(t+1) = C(t) | Ridge on levels | Ridge, same model in return space |
 |---|---|---|---|
@@ -197,7 +197,7 @@ in the feature set) **plus the one-day forecast horizon**. The lookback term sto
 test-fold feature row from being built out of training rows; the horizon term
 accounts for the last training row's target reaching one bar forward, so the raw
 bars behind train and test are strictly disjoint. Nothing is ever shuffled. Fold
-boundaries with dates: [`results/walk_forward_folds.md`](../results/walk_forward_folds.md).
+boundaries with dates: [`results/walk_forward_folds.md`](../results/pipeline/walk_forward_folds.md).
 
 **Everything fitted in-window.** Imputation, winsorisation, scaling and feature
 selection (`SelectKBest`, top 40) all live inside an sklearn `Pipeline` that is
@@ -264,8 +264,8 @@ pip install -r requirements.txt
 # Full basket -> results/           (~2 min)
 python train.py --basket
 
-# Default single ticker, NVDA 2018-2024 -> results/nvda_2018_2024/   (~15 s)
-python train.py --results-dir results/nvda_2018_2024
+# Default single ticker, NVDA 2018-2024 -> results/pipeline/nvda_2018_2024/   (~15 s)
+python train.py --results-dir results/pipeline/nvda_2018_2024
 
 # One ticker, no figures
 python train.py --ticker SPY --no-figures
@@ -291,8 +291,17 @@ drift apart — a mismatch raises rather than silently producing a wrong number.
 
 ## 5. Layout
 
+The repository holds two independent code paths over the same idea. The single-ticker
+NVDA experiment (`run_experiment.py`, results in `RESULTS.md`) is the README's
+headline; this document covers the five-ticker walk-forward pipeline (`train.py`).
+They share no modules, so neither can silently change the other's numbers.
+
 ```
+├── train.py                    # walk-forward pipeline (this document)
+├── predict.py                  # inference CLI for the pipeline artifact
+├── run_experiment.py           # single-ticker NVDA experiment -> RESULTS.md
 ├── src/
+│   │                           # -- walk-forward pipeline --
 │   ├── data_loader.py          # snapshot-first OHLCV loading + validation
 │   ├── feature_engineering.py  # indicators, targets, warm-up measurement
 │   ├── feature_selection.py    # correlation reporting (in-window only)
@@ -300,15 +309,27 @@ drift apart — a mismatch raises rather than silently producing a wrong number.
 │   ├── evaluation.py           # return/direction metrics, McNemar, design
 │   │                           #   effect, walk-forward engine
 │   ├── backtesting.py          # cost-aware long/flat backtest + benchmark
-│   └── utils.py                # config, folds with embargo, artifact I/O
-├── config/config.yaml
-├── data/raw/                   # committed OHLCV snapshots (5 tickers)
-├── results/                    # committed tables + figures
-│   └── nvda_2018_2024/         # single-ticker default run
+│   ├── utils.py                # config, folds with embargo, artifact I/O
+│   │                           # -- NVDA experiment --
+│   ├── market_data.py          # price download + local cache
+│   ├── lean_features.py        # experiment feature set
+│   ├── lean_models.py          # experiment models
+│   ├── splits.py               # year-based train/val/test split
+│   ├── baselines.py            # experiment baselines
+│   ├── return_metrics.py       # experiment metrics
+│   ├── threshold_backtest.py   # threshold sweep + cost-aware backtest
+│   └── _validation.py          # shared 1-D input validation
+├── config/config.yaml          # pipeline sections + experiment: section
+├── data/
+│   ├── NVDA_adjusted.csv       # experiment price cache
+│   └── raw/                    # committed OHLCV snapshots (5 tickers)
+├── results/                    # experiment tables at top level
+│   └── pipeline/               # walk-forward pipeline tables + figures
+│       └── nvda_2018_2024/     # single-ticker default run of the pipeline
+├── docs/PIPELINE.md            # this document
+├── RESULTS.md                  # experiment write-up
 ├── legacy/                     # superseded notebook + PDF
-├── tests/                      # 107 tests
-├── train.py                    # walk-forward pipeline
-└── predict.py                  # inference CLI
+└── tests/                      # 107 tests across both paths
 ```
 
 ---

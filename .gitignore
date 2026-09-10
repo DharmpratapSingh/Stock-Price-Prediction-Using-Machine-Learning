@@ -43,9 +43,12 @@ venv.bak/
 *.ipynb_checkpoints
 
 # Data
-# The raw OHLCV snapshots under data/raw are COMMITTED on purpose: every number
-# in results/ reproduces offline, with no network call and no yfinance drift.
+# Committed on purpose so every number reproduces offline, with no network call
+# and no yfinance drift: the lean experiment's adjusted price cache, and the
+# five-ticker OHLCV snapshots the walk-forward pipeline reads.
 data/*
+!data/.gitkeep
+!data/NVDA_adjusted.csv
 !data/raw/
 data/raw/*
 !data/raw/*.csv
@@ -53,7 +56,12 @@ data/raw/*
 # Models: regenerate with train.py, so not committed
 models/
 
-# results/ is committed -- the tables and figures the README quotes live there.
+# Results are committed -- both the lean experiment's tables and the pipeline's
+# tables and figures under results/pipeline/ are quoted by the docs.
+results/*
+!results/.gitkeep
+!results/*.csv
+!results/pipeline/
 
 # Logs
 logs/

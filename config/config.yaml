@@ -70,7 +70,7 @@ evaluation:
 # Paths
 paths:
   models_dir: "models"
-  results_dir: "results"
+  results_dir: "results/pipeline"
 
 # Logging
 logging:
@@ -96,3 +96,21 @@ training:
   # bars behind the training and test windows are strictly disjoint.
   embargo: "auto"
 
+# Lean leakage-free experiment (run_experiment.py). The sections above configure the train.py walk-forward pipeline.
+experiment:
+  symbol: NVDA
+  download_start: "2017-10-01"   # warmup so features are valid from the first 2018 trading day
+  download_end: "2025-01-01"     # exclusive; test year is 2024
+  train_end: "2022-12-31"
+  val_year: 2023
+  test_year: 2024
+  cost_per_side: 0.00075         # 0.15% round trip
+  thresholds: [0.0, 0.0005, 0.001, 0.002, 0.005]
+  min_days_in_market: 20
+  leakage_warning_directional_accuracy: 0.56
+  data_cache: data/NVDA_adjusted.csv
+  results_dir: results
+  models:
+    ridge: {alpha: 10.0}
+    random_forest: {n_estimators: 300, max_depth: 4, min_samples_leaf: 20, random_state: 42}
+    xgboost: {n_estimators: 200, max_depth: 3, learning_rate: 0.03, subsample: 0.8, colsample_bytree: 0.8, random_state: 42}

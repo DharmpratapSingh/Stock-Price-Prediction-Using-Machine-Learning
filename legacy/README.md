@@ -5,7 +5,7 @@ The original notebook and its writeup PDF, kept for history only: a shuffled
 R² ≈ 0.997.
 
 That R² is the autocorrelation of the price series, not forecasting skill — it is
-the trap both current code paths exist to replace. `results/level_r2_trap.*`
+the trap both current code paths exist to replace. `results/pipeline/level_r2_trap.*`
 reproduces it on proper walk-forward folds and shows a persistence forecast scoring
 the same.
 

@@ -41,7 +41,7 @@ next-day equity returns. Anything north of about 56% on this problem is a
 leakage warning, not skill — and the guard did not fire.
 
 R² on returns is roughly zero. A slightly negative out-of-sample R² is the
-expected result. The random forest's +0.006 is noise, not an edge.
+expected result. The random forest's +0.005 is noise, not an edge.
 
 Every long/flat model lost to buy-and-hold after costs. NVDA rose hard in 2024.
 Sitting in cash on some days is expensive when the asset itself is the trade.
@@ -67,9 +67,15 @@ Full write-up in [`docs/PIPELINE.md`](docs/PIPELINE.md); committed tables and
 figures in [`results/pipeline/`](results/pipeline).
 
 ```bash
-python train.py --basket        # five tickers -> results/pipeline/
-python predict.py --model models/NVDA_linear.joblib
+python train.py --basket                          # five tickers -> results/pipeline/
+python predict.py --model models/JPM_linear.joblib # artifact the basket run saved
 ```
+
+`--basket` saves one inference artifact, for the last ticker it evaluates (JPM).
+`models/` is gitignored, so a fresh clone must run `train.py` before `predict.py`.
+To get a different ticker's artifact, run that ticker on its own — but send it to
+its own output directory so it does not overwrite the basket tables:
+`python train.py --ticker NVDA --results-dir results/pipeline/nvda_2018_2024`.
 
 ## What it does
 
@@ -123,7 +129,8 @@ PDF are under `legacy/`; they are not the experiment this README reports.
 ## Limitations
 
 Single ticker. Daily frequency. Long/flat only — no shorts, no sizing.
-No walk-forward across many windows; one fixed year split.
+No walk-forward across many windows in this experiment; one fixed year
+split. (The walk-forward study is the pipeline section above.)
 Transaction costs are a flat 7.5 bps per side, not a live broker schedule.
 2024 NVDA is a strong upward regime; results will not generalize by assertion.
 

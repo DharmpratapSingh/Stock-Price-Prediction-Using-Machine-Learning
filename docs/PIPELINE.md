@@ -24,7 +24,7 @@ Every number below comes from a committed file under [`results/pipeline/`](../re
 ### 1.1 Return regression — pooled across all five tickers
 
 Out-of-sample log returns, 7,875 days, 25 walk-forward folds per ticker.
-Full per-ticker breakdown: [`results/return_regression.md`](../results/pipeline/return_regression.md).
+Full per-ticker breakdown: [`results/pipeline/return_regression.md`](../results/pipeline/return_regression.md).
 
 | Model | RMSE | R² | R² vs zero-forecast |
 |---|---|---|---|
@@ -47,7 +47,7 @@ study. The persistence baseline runs far lower still, reaching -1.35 (MSFT).
 
 ### 1.2 Direction — pooled
 
-Full table incl. per-ticker: [`results/direction.md`](../results/pipeline/direction.md).
+Full table incl. per-ticker: [`results/pipeline/direction.md`](../results/pipeline/direction.md).
 `p vs 0.5` is a binomial test against a coin flip. `p vs base` is **McNemar's exact
 test** against the always-up baseline — paired, because both predictors are scored
 on the same rows; an unpaired test against the baseline's *rate* would ignore that
@@ -99,7 +99,7 @@ combinations, at p = 0.26, is what noise looks like.
 Long/flat, one position per day, sized at full capital, net of 10 bps commission +
 5 bps slippage **per side**, charged on entry, on every position change, and on the
 final liquidation. Mean across the five tickers; per-ticker rows in
-[`results/backtest.md`](../results/pipeline/backtest.md). `Sharpe` is (CAGR − rf) / annualised
+[`results/pipeline/backtest.md`](../results/pipeline/backtest.md). `Sharpe` is (CAGR − rf) / annualised
 volatility with rf = 0; the textbook arithmetic Sharpe is shown beside it (see §3).
 
 | Strategy | Total return | Annualised | Sharpe | Sharpe (arith.) | Max drawdown | Turnover | Time in market |
@@ -130,9 +130,9 @@ forecast accuracy.
 ### 1.4 Cost sensitivity
 
 Mean excess return versus buy-and-hold, per-side cost swept from 0 to 20 bps.
-Full grid: [`results/cost_sensitivity.md`](../results/pipeline/cost_sensitivity.md); the
+Full grid: [`results/pipeline/cost_sensitivity.md`](../results/pipeline/cost_sensitivity.md); the
 15 bps row is the headline configuration and comes from
-[`results/backtest.md`](../results/pipeline/backtest.md).
+[`results/pipeline/backtest.md`](../results/pipeline/backtest.md).
 
 | Per-side cost | Random Forest | Ridge | XGBoost | Runs beating buy-and-hold |
 |---|---|---|---|---|
@@ -153,8 +153,8 @@ quoted without a cost sweep is not a result.
 ## 2. Why not R² on prices
 
 The same models, the same folds, scored two ways. Full table:
-[`results/level_r2_trap.md`](../results/pipeline/level_r2_trap.md); figure:
-[`results/level_r2_trap.png`](../results/pipeline/level_r2_trap.png).
+[`results/pipeline/level_r2_trap.md`](../results/pipeline/level_r2_trap.md); figure:
+[`results/pipeline/level_r2_trap.png`](../results/pipeline/level_r2_trap.png).
 
 | Ticker | Persistence: ŷ(t+1) = C(t) | Ridge on levels | Ridge, same model in return space |
 |---|---|---|---|
@@ -197,7 +197,7 @@ in the feature set) **plus the one-day forecast horizon**. The lookback term sto
 test-fold feature row from being built out of training rows; the horizon term
 accounts for the last training row's target reaching one bar forward, so the raw
 bars behind train and test are strictly disjoint. Nothing is ever shuffled. Fold
-boundaries with dates: [`results/walk_forward_folds.md`](../results/pipeline/walk_forward_folds.md).
+boundaries with dates: [`results/pipeline/walk_forward_folds.md`](../results/pipeline/walk_forward_folds.md).
 
 **Everything fitted in-window.** Imputation, winsorisation, scaling and feature
 selection (`SelectKBest`, top 40) all live inside an sklearn `Pipeline` that is

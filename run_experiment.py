@@ -321,11 +321,9 @@ def backtest_table(
     """Benchmark first, then each model at its threshold and at zero."""
     records: list[tuple[str, dict]] = [("buy_and_hold", benchmark)]
     for model in MODEL_NAMES:
-        label = f"{model}@{chosen[model]:g}"
-        # When the sweep picked 0.0 the two rows are the same rule; label the
-        # chosen one so the table keeps one row per backtest either way.
-        if chosen[model] == 0.0:
-            label = f"{model}@0 (chosen)"
+        # The chosen row always carries the marker, including when the sweep
+        # picked 0.0 and the two rows describe the same rule.
+        label = f"{model}@{chosen[model]:g} (chosen)"
         records.append((label, at_chosen[model]))
         records.append((f"{model}@0", at_zero[model]))
 
@@ -508,8 +506,10 @@ def build_report(result: dict) -> str:
         "`round_trips_per_year` annualizes the test-year round trips "
         f"({int(splits.loc['test', 'rows'])} trading days at "
         f"{TRADING_DAYS_PER_YEAR} days/year); `implied_annual_cost_drag` is "
-        "that rate times the round-trip cost. `test_cost_drag` is what the "
-        "backtest actually charged over the test year.\n"
+        "that rate times the round-trip cost. `test_cost_drag` is the gap "
+        "between compounded gross and net return over the test year; the "
+        "linear sum actually charged is `total_cost` in the backtest "
+        "table.\n"
     )
 
     # -- sweeps -----------------------------------------------------------

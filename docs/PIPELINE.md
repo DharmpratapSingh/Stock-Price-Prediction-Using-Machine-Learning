@@ -287,6 +287,12 @@ list and the config that built it. `predict.py` consumes that artifact and rebui
 features through the same `build_dataset` call, so training and inference cannot
 drift apart — a mismatch raises rather than silently producing a wrong number.
 
+**Artifacts.** `--basket` saves one inference artifact, for the last ticker it
+evaluates (JPM). `models/` is gitignored, so a fresh clone must run `train.py`
+before `predict.py`. To get a different ticker's artifact, run that ticker on its
+own — and send it to its own output directory so it does not overwrite the basket
+tables: `python train.py --ticker NVDA --results-dir results/pipeline/nvda_2018_2024`.
+
 ---
 
 ## 5. Layout

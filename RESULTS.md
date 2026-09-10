@@ -7,7 +7,7 @@ Leakage-free walk-forward-by-calendar experiment: models are fitted on the train
 - Symbol: `NVDA`
 - Download range: `2017-10-01` to `2025-01-01` (end exclusive; the early months are feature warmup)
 - Split boundaries: train through `2022-12-31`, validation `2023`, test `2024`
-- Run timestamp (UTC): 2026-09-10T02:18:50Z
+- Run timestamp (UTC): 2026-09-10T02:51:25Z
 - Cost assumption: 0.00075 per side (0.15% round trip)
 - Threshold grid: 0, 0.0005, 0.001, 0.002, 0.005
 - Minimum days in market: 20
@@ -68,7 +68,7 @@ Baselines come first on purpose: a model that cannot beat `zero_return` on RMSE 
 | ridge@0 | 150.6% | 130.1% | 20.5% | 8.6% | 2.16 | -14.7% | 114 | 57 | 61.8% |
 | random_forest@0 (chosen) | 133.6% | 123.6% | 9.9% | 4.4% | 2.01 | -22.8% | 58 | 29 | 71.7% |
 | random_forest@0 | 133.6% | 123.6% | 9.9% | 4.4% | 2.01 | -22.8% | 58 | 29 | 71.7% |
-| xgboost@0.0005 | 64.2% | 54.5% | 9.8% | 6.2% | 1.28 | -21.7% | 82 | 41 | 59.4% |
+| xgboost@0.0005 (chosen) | 64.2% | 54.5% | 9.8% | 6.2% | 1.28 | -21.7% | 82 | 41 | 59.4% |
 | xgboost@0 | 71.9% | 62.9% | 9.0% | 5.4% | 1.41 | -23.4% | 72 | 36 | 62.9% |
 
 `buy_and_hold` is the benchmark to beat. Each model appears twice: at the threshold chosen on the validation year, and at 0.0 (long whenever the forecast is positive). `days_in_market` is the fraction of test days holding the position.
@@ -85,7 +85,7 @@ That is the bill for trading in and out every day, before a single model is fitt
 | random_forest | 0.0000 | 29 | 29.1 | 4.4% | 9.9% |
 | xgboost | 0.0005 | 41 | 41.2 | 6.2% | 9.8% |
 
-`round_trips_per_year` annualizes the test-year round trips (251 trading days at 252 days/year); `implied_annual_cost_drag` is that rate times the round-trip cost. `test_cost_drag` is what the backtest actually charged over the test year.
+`round_trips_per_year` annualizes the test-year round trips (251 trading days at 252 days/year); `implied_annual_cost_drag` is that rate times the round-trip cost. `test_cost_drag` is the gap between compounded gross and net return over the test year; the linear sum actually charged is `total_cost` in the backtest table.
 
 ## Threshold sweeps (validation year 2023)
 

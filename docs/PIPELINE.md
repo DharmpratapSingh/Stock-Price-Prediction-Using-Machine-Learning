@@ -62,12 +62,12 @@ of **0.405**, giving a design effect of 1 + (m−1)ρ = **2.62** and an effectiv
 correctness indicator, which is the quantity being averaged — computed in
 [`results/pooled_dependence.md`](../results/pooled_dependence.md).
 
-| Model | Accuracy | iid 95% CI | deff | eff. n | **adjusted 95% CI** | adj. p vs 0.5 | McNemar p vs base |
+| Model | Accuracy | iid 95% CI | deff | eff. n | **adjusted 95% CI** | adj. p vs 0.5 | McNemar p vs base (nominal → clustered) |
 |---|---|---|---|---|---|---|---|
-| Random Forest | 53.32% | [52.22, 54.42] | 1.47 | 5,342 | **[51.98, 54.66]** | 1.2e-06 | 0.448 |
-| Ridge / Logistic | 52.08% | [50.97, 53.18] | 1.30 | 6,067 | **[50.82, 53.33]** | 0.0013 | 0.0140 |
-| XGBoost | 51.67% | [50.57, 52.77] | 1.25 | 6,281 | **[50.43, 52.90]** | 0.0087 | 0.0026 |
-| *Baseline: always up* | **53.75%** | [52.65, 54.85] | 2.62 | 3,004 | **[51.97, 55.53]** | 4.0e-05 | — |
+| Random Forest | 53.32% | [52.22, 54.42] | 1.47 | 5,342 | **[51.97, 54.65]** | 1.36e-06 | 0.448 → **0.528** |
+| Ridge / Logistic | 52.08% | [50.97, 53.18] | 1.30 | 6,067 | **[50.81, 53.32]** | 0.0013 | 0.0140 → **0.0523** |
+| XGBoost | 51.67% | [50.57, 52.77] | 1.25 | 6,281 | **[50.43, 52.90]** | 0.0087 | 0.0026 → **0.0179** |
+| *Baseline: always up* | **53.75%** | [52.65, 54.85] | 2.62 | 3,004 | **[51.98, 55.54]** | 4.0e-05 | — |
 
 Note the design effects differ by design. The always-up baseline's correctness
 indicator *is* the market's up/down indicator, so it absorbs the full 2.62 and its
@@ -75,13 +75,20 @@ interval widens most. The models' errors decorrelate across tickers (ρ = 0.06�
 so they retain more effective sample — but their accuracy is lower, and that is what
 decides the question.
 
+The clustering correction applies to the paired test as well. The signed
+discordance `D = correct_model − correct_baseline` is itself cross-ticker
+correlated (ρ_D = 0.11–0.16, deff 1.43–1.63), so the discordant pairs McNemar
+counts are not independent either; the clustered column divides them by that panel's
+own design effect before running the exact binomial.
+
 This table is the reason the direction task needs two null hypotheses. Against a
 coin flip, all three models remain significant even after the clustering
 adjustment. Against the always-up baseline, **none of them wins**: Random Forest
-ties it (McNemar p = 0.45, and its point estimate is *lower* — 929 days where it
-wins against 963 where the baseline does), while Ridge and XGBoost are significantly
-**worse** (p = 0.014 and p = 0.0026). The models are rediscovering market drift, not
-direction.
+ties it on either version of the test (p = 0.45 nominal, 0.53 clustered, and its
+point estimate is *lower* — 929 days where it wins against 963 where the baseline
+does), while **Ridge is borderline and XGBoost significantly worse (p = 0.014 →
+0.052 and 0.0026 → 0.018 once the discordance panel's own design effect is
+applied)**. The models are rediscovering market drift, not direction.
 
 Best single cell in the study: AAPL / Random Forest at 54.98% [52.52, 57.43],
 McNemar p = 0.26 against that ticker's baseline. One promising cell out of 15 tested
@@ -210,7 +217,12 @@ conclusions (§1.1, §1.2) are visible only because the baselines are there.
 same rows uses McNemar's exact test, not a one-sample binomial against the
 baseline's rate. Pooled intervals are widened by the panel's design effect, because
 five tickers scored on the same dates — one of which contains the other four — do
-not supply five times the information (§1.2).
+not supply five times the information. The same correction is carried through to
+McNemar itself, since the signed discordance between two predictors is correlated
+across tickers too; both the nominal and the clustered p-value are reported (§1.2).
+Intervals and p-values at an effective sample size are computed from the same
+rounded effective n, so a reader never sees a CI and a p-value derived from
+different amounts of data.
 
 **Scale-free features only.** The model matrix keeps the 48 features that are
 invariant to price level — returns, `dist_from_sma_*`, RSI, `bb_percent`, ATR/price,
@@ -265,7 +277,7 @@ python predict.py --model models/NVDA_linear.joblib --recent 3
 python train.py --basket --download
 
 # Tests
-python -m pytest -q          # 102 passed
+python -m pytest -q          # 107 passed
 ```
 
 `train.py` writes every table as both `.csv` and `.md`, plus three figures
@@ -294,7 +306,7 @@ drift apart — a mismatch raises rather than silently producing a wrong number.
 ├── results/                    # committed tables + figures
 │   └── nvda_2018_2024/         # single-ticker default run
 ├── legacy/                     # superseded notebook + PDF
-├── tests/                      # 102 tests
+├── tests/                      # 107 tests
 ├── train.py                    # walk-forward pipeline
 └── predict.py                  # inference CLI
 ```

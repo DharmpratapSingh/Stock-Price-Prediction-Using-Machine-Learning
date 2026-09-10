@@ -10,10 +10,12 @@ and reports R2 against a zero forecast alongside the usual R2.
 tests. Comparisons against a rival predictor on the same rows use McNemar's test
 (paired), not a one-sample binomial (unpaired).
 
-*Panel dependence* -- ``design_effect`` and ``adjust_proportion_for_clustering``
-correct pooled intervals for the fact that several tickers are scored on identical
-calendar dates. Quoting an iid interval over a correlated panel understates the
-uncertainty, sometimes by a factor of 1.6 on the interval width.
+*Panel dependence* -- ``design_effect``, ``adjust_proportion_for_clustering`` and
+``clustered_mcnemar_pvalue`` correct pooled inference for the fact that several
+tickers are scored on identical calendar dates. Quoting an iid interval over a
+correlated panel understates the uncertainty, sometimes by a factor of 1.6 on the
+interval width. The correction applies to the paired test too: the signed
+discordance between two predictors is itself cross-ticker correlated.
 
 *Walk-forward* -- ``run_walk_forward`` is the engine that produces every
 out-of-sample number in the project.
@@ -165,6 +167,46 @@ def mcnemar_test(
     }
 
 
+def clustered_mcnemar_pvalue(b: int, c: int, design_effect: float) -> float:
+    """
+    McNemar p-value corrected for clustered discordant pairs.
+
+    Plain McNemar assumes the discordant pairs are independent. They are not when
+    several tickers are scored on the same dates: the signed discordance
+    ``D = correct_model - correct_baseline`` is itself cross-ticker correlated, so
+    two predictors can disagree on the same day across the whole basket for one
+    market-wide reason. Treating those as independent pairs overstates the evidence.
+
+    The correction divides the discordant counts by the design effect of the D
+    panel -- the same ``design_effect`` machinery the pooled accuracy intervals use
+    -- and runs the exact binomial at that effective size. The split between b and c
+    is preserved, so only the strength of the evidence moves, not its direction.
+
+    Args:
+        b: Discordant pairs where the model is right and the reference wrong
+        c: Discordant pairs where the reference is right and the model wrong
+        design_effect: Design effect of the signed-discordance panel
+
+    Returns:
+        Two-sided p-value at the effective number of discordant pairs
+    """
+    from scipy import stats
+
+    total = b + c
+    if total == 0:
+        return 1.0
+
+    deff = max(1.0, float(design_effect))
+    n_eff = int(round(total / deff))
+    if n_eff < 1:
+        return 1.0
+
+    b_eff = int(round(b / deff))
+    b_eff = min(max(b_eff, 0), n_eff)
+
+    return float(stats.binomtest(b_eff, n_eff, 0.5).pvalue)
+
+
 def direction_metrics(
     y_true_direction: np.ndarray,
     y_pred_direction: np.ndarray,
@@ -307,9 +349,12 @@ def adjust_proportion_for_clustering(
     """
     from scipy import stats
 
+    # The interval and the p-values are computed at the SAME rounded effective
+    # size, so a reader cannot find a CI and a p-value that disagree about how
+    # much data they were derived from.
     n_round = int(round(n_effective))
     successes = int(round(accuracy * n_round))
-    lower, upper = wilson_interval(accuracy * n_effective, n_effective, confidence)
+    lower, upper = wilson_interval(successes, n_round, confidence)
 
     adjusted = {
         'n_effective': float(n_effective),

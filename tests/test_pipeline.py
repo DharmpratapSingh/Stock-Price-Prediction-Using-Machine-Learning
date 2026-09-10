@@ -55,7 +55,30 @@ def ohlcv():
 # (i) No lookahead in features
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("cut", [300, 600, 900])
+# Cut points for the truncation test. Truncating at C perturbs only row C-1, so a
+# leak that fills forward over a gap of period p is visible only when C = 1 (mod p).
+# These three are strictly inside the 900-row fixture and cover different residues:
+#   301 -> 1 mod 5, 0 mod 7      596 -> 1 mod 5, 1 mod 7      851 -> 1 mod 5, 4 mod 7
+# 596 is the one that catches period-7 gaps; all three catch period-5 gaps and any
+# plain shift(-1). test_lookahead_check_catches_planted_leaks enforces that claim.
+LOOKAHEAD_CUTS = [301, 596, 851]
+
+
+def _assert_no_lookahead(raw: pd.DataFrame, cut: int) -> None:
+    """Recompute features on raw[:cut] and require the overlap to be identical."""
+    assert 0 < cut < len(raw), "cut must fall strictly inside the series"
+
+    full = FeatureEngineer(raw).create_all_features(dropna=False)
+    truncated = FeatureEngineer(raw.iloc[:cut]).create_all_features(dropna=False)
+
+    assert len(truncated) == cut
+    pd.testing.assert_frame_equal(
+        full.loc[truncated.index], truncated,
+        check_exact=False, rtol=1e-10, atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("cut", LOOKAHEAD_CUTS)
 def test_features_use_no_future_data(ohlcv, cut):
     """
     Truncating the price series must not change any earlier feature value.
@@ -64,39 +87,70 @@ def test_features_use_no_future_data(ohlcv, cut):
     shift with the wrong sign -- then removing the tail would change rows before
     the cut. Recomputing on a truncated series and comparing the overlap is a
     direct test of the property the whole project depends on.
-
-    Several cut points are used because a single one can be passed by an
-    interior leak: a back-fill or interpolation that only reaches a few rows
-    backwards shows up at some cuts and not others.
     """
-    full = FeatureEngineer(ohlcv).create_all_features(dropna=False)
-    truncated = FeatureEngineer(ohlcv.iloc[:cut]).create_all_features(dropna=False)
+    _assert_no_lookahead(ohlcv, cut)
 
-    overlap = truncated.index
-    assert len(overlap) == cut
 
-    pd.testing.assert_frame_equal(
-        full.loc[overlap], truncated, check_exact=False, rtol=1e-10, atol=1e-12
+# Leaks planted into feature engineering to prove the check above can fail. Each
+# takes the Close series and returns a column that uses information from the future.
+PLANTED_LEAKS = {
+    # The obvious case: tomorrow's close, straight in.
+    "shift_minus_1": lambda close: close.shift(-1),
+    # Interior gaps filled backwards from the next observation -- the leak a
+    # single cut point can miss, at two different periods.
+    "interior_bfill_p5": lambda close: close.mask(
+        np.arange(len(close)) % 5 == 0).bfill(),
+    "interior_bfill_p7": lambda close: close.mask(
+        np.arange(len(close)) % 7 == 0).bfill(),
+    # Linear interpolation across a one-row gap averages past and future.
+    "interior_interpolate_p5": lambda close: close.mask(
+        np.arange(len(close)) % 5 == 0).interpolate(),
+    "interior_interpolate_p7": lambda close: close.mask(
+        np.arange(len(close)) % 7 == 0).interpolate(),
+}
+
+
+@pytest.mark.parametrize("leak_name", sorted(PLANTED_LEAKS))
+def test_lookahead_check_catches_planted_leaks(ohlcv, monkeypatch, leak_name):
+    """
+    Mutation probe: plant a leak in feature engineering, require detection.
+
+    A passing test proves nothing unless it can fail. This patches
+    ``create_price_patterns`` so the leaky column flows through
+    ``create_all_features`` exactly like a real feature, then asserts that at
+    least one of the configured cut points rejects it. That makes the probe
+    pipeline-level -- it exercises the same code path the real test does, rather
+    than checking that ``assert_frame_equal`` works on a hand-built frame.
+    """
+    leak = PLANTED_LEAKS[leak_name]
+    original = FeatureEngineer.create_price_patterns
+
+    def leaky_create_price_patterns(self):
+        features = original(self)
+        features['planted_leak'] = leak(self.data['Close'])
+        return features
+
+    monkeypatch.setattr(
+        FeatureEngineer, 'create_price_patterns', leaky_create_price_patterns
+    )
+
+    caught = []
+    for cut in LOOKAHEAD_CUTS:
+        try:
+            _assert_no_lookahead(ohlcv, cut)
+        except AssertionError:
+            caught.append(cut)
+
+    assert caught, (
+        f"{leak_name} escaped every cut in {LOOKAHEAD_CUTS}; the cut points no "
+        f"longer cover the residues needed to see this class of leak"
     )
 
 
-def test_a_planted_backfill_would_be_caught(ohlcv):
-    """
-    Negative control: confirm the truncation test can actually fail.
-
-    A test that passes no matter what is worth nothing, so this plants a leak --
-    a backward-filled column that copies a future value into the past -- and
-    asserts the comparison rejects it.
-    """
-    leaked_full = ohlcv["Close"].shift(-3).bfill()
-    leaked_cut = ohlcv.iloc[:600]["Close"].shift(-3).bfill()
-
-    with pytest.raises(AssertionError):
-        pd.testing.assert_frame_equal(
-            leaked_full.loc[leaked_cut.index].to_frame(),
-            leaked_cut.to_frame(),
-            check_exact=False, rtol=1e-10, atol=1e-12,
-        )
+def test_planted_leak_probe_is_not_self_fulfilling(ohlcv):
+    """Without a planted leak, the same cut points must all pass."""
+    for cut in LOOKAHEAD_CUTS:
+        _assert_no_lookahead(ohlcv, cut)
 
 
 def test_every_engineered_column_is_covered_by_the_lookahead_check(ohlcv):

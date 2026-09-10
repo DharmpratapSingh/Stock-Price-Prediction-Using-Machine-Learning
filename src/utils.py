@@ -6,11 +6,9 @@ import os
 import yaml
 import logging
 import joblib
-import numpy as np
 import pandas as pd
 from dataclasses import dataclass, asdict
-from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 
 def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
@@ -59,33 +57,6 @@ def setup_logging(log_level: str = "INFO", log_file: str = None) -> logging.Logg
         logger.addHandler(file_handler)
 
     return logger
-
-
-def time_series_split(
-    data: pd.DataFrame,
-    test_size: float = 0.2,
-    validation_size: float = 0.1
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Split time series data chronologically
-
-    Args:
-        data: DataFrame to split
-        test_size: Fraction for test set
-        validation_size: Fraction for validation set
-
-    Returns:
-        Tuple of (train_data, val_data, test_data)
-    """
-    n = len(data)
-    test_idx = int(n * (1 - test_size))
-    val_idx = int(test_idx * (1 - validation_size))
-
-    train_data = data.iloc[:val_idx]
-    val_data = data.iloc[val_idx:test_idx]
-    test_data = data.iloc[test_idx:]
-
-    return train_data, val_data, test_data
 
 
 @dataclass(frozen=True)

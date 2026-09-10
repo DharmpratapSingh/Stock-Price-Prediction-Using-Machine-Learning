@@ -37,6 +37,7 @@ from src.backtesting import Backtester
 from src.data_loader import load_stock_data
 from src.evaluation import (
     adjust_proportion_for_clustering,
+    clustered_mcnemar_pvalue,
     design_effect,
     direction_metrics,
     return_regression_metrics,
@@ -383,13 +384,37 @@ def correctness_panel(results: List[Dict], model_key: str) -> pd.DataFrame:
     return pd.DataFrame(columns)
 
 
+def discordance_panel(results: List[Dict], model_key: str,
+                      baseline_key: str = "clf::always_up") -> pd.DataFrame:
+    """
+    Build a date x ticker panel of signed discordance against the baseline.
+
+    ``D = correct_model - correct_baseline`` takes values in {-1, 0, +1}: +1 on
+    days the model wins, -1 on days the baseline wins, 0 when they agree. McNemar
+    counts the non-zero entries, so the cross-ticker correlation of D is what
+    decides whether those discordant pairs are independent.
+    """
+    columns = {}
+    for result in results:
+        model = result["predictions"][model_key]
+        baseline = result["predictions"][baseline_key]
+        truth = model["y_true"].to_numpy()
+        correct_model = (model["y_pred"].to_numpy() == truth).astype(float)
+        correct_base = (baseline["y_pred"].to_numpy() == truth).astype(float)
+        columns[result["symbol"]] = pd.Series(
+            correct_model - correct_base, index=model.index
+        )
+    return pd.DataFrame(columns)
+
+
 def score_pooled_dependence(results: List[Dict]) -> pd.DataFrame:
     """
     Quantify how much less information the pooled panel carries than n suggests.
 
-    Reports the design effect for each direction model's correctness panel, plus
-    two context rows: the realised up/down indicator and the realised log return,
-    whose cross-ticker correlation is the underlying cause.
+    Reports the design effect for each direction model's correctness panel and for
+    its signed-discordance panel against the always-up baseline, plus two context
+    rows -- the realised up/down indicator and the realised log return -- whose
+    cross-ticker correlation is the underlying cause.
     """
     rows = []
 
@@ -400,6 +425,11 @@ def score_pooled_dependence(results: List[Dict]) -> pd.DataFrame:
             "quantity": f"correctness indicator: {name}",
             **design_effect(panel),
         })
+        if key != "clf::always_up":
+            rows.append({
+                "quantity": f"discordance vs always_up: {name}",
+                **design_effect(discordance_panel(results, key)),
+            })
 
     # Context: the shared market moves that drive the correlation above.
     reference = {r["symbol"]: r["predictions"]["clf::always_up"] for r in results}
@@ -472,6 +502,17 @@ def score_pooled(
                     reference_rate=baseline_accuracy, confidence=confidence,
                 ),
             })
+
+            # The paired test needs the same correction: the signed discordance
+            # against the baseline is itself correlated across tickers.
+            if not is_baseline:
+                d_effect = design_effect(discordance_panel(results, key))
+                metrics["mcnemar_deff"] = d_effect["design_effect"]
+                metrics["mcnemar_corr"] = d_effect["mean_pairwise_corr"]
+                metrics["p_vs_reference_clustered"] = clustered_mcnemar_pvalue(
+                    metrics["mcnemar_b"], metrics["mcnemar_c"],
+                    d_effect["design_effect"],
+                )
 
         dir_rows.append({
             "ticker": "POOLED", "model": labels.get(name, name),
@@ -824,7 +865,8 @@ def main(
         print("\nDesign-effect-adjusted pooled direction:")
         adjusted = direction_table[direction_table["ticker"] == "POOLED"]
         adj_cols = ["model", "accuracy", "n", "n_effective", "design_effect",
-                    "adj_ci_lower", "adj_ci_upper", "adj_p_vs_0.5"]
+                    "adj_ci_lower", "adj_ci_upper", "adj_p_vs_0.5",
+                    "p_vs_reference", "mcnemar_deff", "p_vs_reference_clustered"]
         print(adjusted[[c for c in adj_cols if c in adjusted]]
               .to_string(index=False, float_format=lambda v: f"{v:.4f}"))
 
